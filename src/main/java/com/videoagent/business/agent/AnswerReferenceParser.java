@@ -13,33 +13,44 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 回答引用解析器（亮点 A）：从回答文本提取 [mm:ss] 时间戳，关联到检索命中块，组装结构化引用。
+ * 回答引用解析器（亮点 A -> S5 让类型权威化）：从回答文本提取 [mm:ss] 时间戳，
+ * 关联到检索命中块，组装结构化引用。修复缺陷 D：识别「（画面）」「【画面@mm:ss】」标记，
+ * 使画面引用统一标为 FRAME，后端类型权威，前端只负责渲染不再猜测。
  */
 @Slf4j
 @Component
 public class AnswerReferenceParser {
 
-    private static final Pattern TIME_REF = Pattern.compile("\\[(\\d{1,2}):(\\d{2})(?:-(\\d{1,2}):(\\d{2}))?]");
+    /** 普通时间引用，支持可选「（画面）」后缀 */
+    private static final Pattern TIME_REF = Pattern.compile(
+            "\\[(\\d{1,2}):(\\d{2})(?:-(\\d{1,2}):(\\d{2}))?](（画面）)?");
+    /** 画面时间引用，如「【画面@01:23】」 */
+    private static final Pattern FRAME_REF = Pattern.compile(
+            "【画面@(\\d{1,2}):(\\d{2})(?:-(\\d{1,2}):(\\d{2}))?】");
     private static final int MATCH_TOLERANCE_SEC = 5;
 
     public List<ReferenceDto> parse(String answer, Long videoId, List<VectorRepository.SearchHit> hits) {
         List<ReferenceDto> refs = new ArrayList<>();
         Map<String, ReferenceDto> dedup = new LinkedHashMap<>();
-        Matcher matcher = TIME_REF.matcher(answer == null ? "" : answer);
-        while (matcher.find()) {
-            int startSec = Integer.parseInt(matcher.group(1)) * 60 + Integer.parseInt(matcher.group(2));
-            int endSec = matcher.group(4) != null
-                    ? Integer.parseInt(matcher.group(3)) * 60 + Integer.parseInt(matcher.group(4))
-                    : startSec + 10;
-            VectorRepository.SearchHit hit = findClosestHit(hits, startSec);
-            ReferenceDto ref = new ReferenceDto(
-                    hit != null ? hit.videoId() : videoId,
-                    hit != null && hit.startSec() != null ? hit.startSec() : startSec,
-                    hit != null && hit.endSec() != null ? hit.endSec() : endSec,
-                    hit != null ? hit.type() : "TEXT",
-                    hit != null ? truncate(hit.content()) : null);
+        String text = answer == null ? "" : answer;
+
+        Matcher timeMatcher = TIME_REF.matcher(text);
+        while (timeMatcher.find()) {
+            int startSec = toSec(timeMatcher, 1, 2);
+            int endSec = timeMatcher.group(4) != null ? Math.max(startSec, toSec(timeMatcher, 3, 4)) : startSec + 10;
+            boolean vision = timeMatcher.group(5) != null;
+            ReferenceDto ref = buildRef(hits, videoId, startSec, endSec, vision);
             dedup.put(ref.startSec() + ":" + ref.type(), ref);
         }
+        Matcher frameMatcher = FRAME_REF.matcher(text);
+        while (frameMatcher.find()) {
+            int startSec = toSec(frameMatcher, 1, 2);
+            int endSec = frameMatcher.group(4) != null ? Math.max(startSec, toSec(frameMatcher, 3, 4)) : startSec;
+            // 画面标记引用：必然为画面
+            ReferenceDto ref = buildRef(hits, videoId, startSec, endSec, true);
+            dedup.put(ref.startSec() + ":" + ref.type(), ref);
+        }
+
         refs.addAll(dedup.values());
         if (refs.isEmpty() && hits != null && !hits.isEmpty()) {
             // 回答未带时间戳时，兜底带出最高分命中，保证溯源可见
@@ -48,6 +59,28 @@ public class AnswerReferenceParser {
                     truncate(top.content())));
         }
         return refs;
+    }
+
+    private int toSec(Matcher m, int minG, int secG) {
+        return Integer.parseInt(m.group(minG)) * 60 + Integer.parseInt(m.group(secG));
+    }
+
+    /** 组装单条引用：画面标记或命中画面块统一标 FRAME，否则沿用命中类型，后端类型权威 */
+    private ReferenceDto buildRef(List<VectorRepository.SearchHit> hits, Long videoId,
+                                  int startSec, int endSec, boolean vision) {
+        VectorRepository.SearchHit hit = findClosestHit(hits, startSec);
+        if (hit != null && (vision || "FRAME".equals(hit.type()))) {
+            return new ReferenceDto(hit.videoId(),
+                    hit.startSec() != null ? hit.startSec() : startSec,
+                    hit.endSec() != null ? hit.endSec() : endSec,
+                    "FRAME",
+                    truncate(hit.content()));
+        }
+        return new ReferenceDto(hit != null ? hit.videoId() : videoId,
+                hit != null && hit.startSec() != null ? hit.startSec() : startSec,
+                hit != null && hit.endSec() != null ? hit.endSec() : endSec,
+                hit != null ? hit.type() : "TEXT",
+                hit != null ? truncate(hit.content()) : null);
     }
 
     private VectorRepository.SearchHit findClosestHit(List<VectorRepository.SearchHit> hits, int sec) {

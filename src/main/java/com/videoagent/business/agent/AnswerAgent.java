@@ -38,7 +38,8 @@ public class AnswerAgent {
                    - DIRECT：有直接证据（转写原文/画面字幕/元数据），直接断言。
                    - INFERENCE：无直接证据，但可基于已有证据+常识合理推断，在回答中给出并标注"（推断）"。
                    - UNSURE：既无直接证据也无法推断时，明确"视频未覆盖该信息"，不要编造。
-                4. 只输出 JSON，格式：
+                4. 若用户是在追问/要求进一步分析（对话历史里你已对同一视频给出整体总结）：直接基于已有总结展开，不要重复从头归纳。
+                5. 只输出 JSON，格式：
                 {"answer":"给用户的可读中文回答（含引用标注）","assertions":[
                    {"text":"可独立核验的陈述","confidence":"DIRECT|INFERENCE|UNSURE",
                     "evidence":[{"type":"AUDIO|VISION|RETRIEVED|META","startSec":20,
