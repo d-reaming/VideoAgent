@@ -94,6 +94,15 @@ video-agent:
       vision-model: qwen-vl-max
       embedding-model: text-embedding-v3
       embedding-dim: 1024
+  ocr:
+    local:
+      enabled: ${OCR_ENABLED:false}
+      python: ${WHISPER_PYTHON:python}
+      # 持久化 OCR worker：常驻进程加载一次 RapidOCR，多视频复用，摊销模型冷加载
+      worker-server-script: ./python/ocr_server.py
+      device: auto
+      # 识别置信度阈值：低于此值的文字丢弃（去噪）
+      min-confidence: 0.5
   asr:
     local:
       enabled: true

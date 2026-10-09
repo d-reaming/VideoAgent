@@ -20,6 +20,7 @@ public record Evidence(
         String label = switch (type) {
             case AUDIO -> "语音";
             case VISION -> "画面";
+            case OCR -> "字幕";
             case RETRIEVED -> "检索";
             case META -> "元数据";
         };

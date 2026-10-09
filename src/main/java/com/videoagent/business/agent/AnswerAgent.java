@@ -27,28 +27,34 @@ public class AnswerAgent {
     private final ChatModel chatModel;
     private final GradedAnswerParser parser;
 
-    public GradedAnswer generate(String question, String context, String historyText) {
+    public GradedAnswer generate(String question, String context, String historyText, String followUpHint) {
         String system = """
                 你是视频内容问答助手。基于给定的「视频检索上下文」回答用户问题，并输出结构化分级结果。
-                1. 引用语音内容标注 [mm:ss]（如 [01:23]）；引用画面信息标注 [mm:ss]（画面）。
+                1. 引用语音内容标注 [mm:ss]（如 [01:23]）；引用画面信息标注 [mm:ss]（画面）；引用画面文字/字幕标注 [mm:ss]（字幕）。
                 2. 区分两类问题：
                    - 全局总结/大意类：主动归纳上下文，给出真正的内容总结，不要反复声明"我只能确认"。
                    - 事实点查类：直接回答检索到的内容。
-                3. 按置信分级作答（很重要，不要过度保守）：
-                   - DIRECT：有直接证据（转写原文/画面字幕/元数据），直接断言。
-                   - INFERENCE：无直接证据，但可基于已有证据+常识合理推断，在回答中给出并标注"（推断）"。
-                   - UNSURE：既无直接证据也无法推断时，明确"视频未覆盖该信息"，不要编造。
-                4. 若用户是在追问/要求进一步分析（对话历史里你已对同一视频给出整体总结）：直接基于已有总结展开，不要重复从头归纳。
-                5. 只输出 JSON，格式：
+                3. 置信分级作答（不要过度保守）：
+                   - 有直接证据（转写原文/画面字幕/画面描述/元数据）：直接断言，正常陈述，不要反复加"（推断）"。
+                   - 无直接证据但可合理推断：用自然语言给出结论，仅在确实需要边界时轻量标注"（推测）"。
+                   - 两者皆无：才说"视频未覆盖该信息"。
+                   始终用自然、直接、可读的中文回答，避免通篇堆砌"推断/依据未覆盖"式免责。
+                4. 回答语言：一律使用简体中文；视频中的外语专名（人名/作品名/机构/术语等）翻译为中文，必要时括号附原文
+                   （如 安（アン））；不要原样堆砌片假名/外文术语。
+                5. 若收到「上一问回指提示」，则本问题省略主语，围绕上一问作答，不要重新概括全片。
+                6. 只输出 JSON，格式：
                 {"answer":"给用户的可读中文回答（含引用标注）","assertions":[
                    {"text":"可独立核验的陈述","confidence":"DIRECT|INFERENCE|UNSURE",
-                    "evidence":[{"type":"AUDIO|VISION|RETRIEVED|META","startSec":20,
+                    "evidence":[{"type":"AUDIO|VISION|OCR|RETRIEVED|META","startSec":20,
                     "endSec":35,"text":"支撑文本"}]}]}
                 """;
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(SystemMessage.from(system));
         if (historyText != null && !historyText.isBlank()) {
             messages.add(SystemMessage.from("对话历史：\n" + historyText));
+        }
+        if (followUpHint != null && !followUpHint.isBlank()) {
+            messages.add(SystemMessage.from(followUpHint));
         }
         messages.add(UserMessage.from("检索上下文：\n" + context + "\n\n问题：" + question));
         try {

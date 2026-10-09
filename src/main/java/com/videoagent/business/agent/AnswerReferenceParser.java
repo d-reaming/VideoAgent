@@ -21,12 +21,15 @@ import java.util.regex.Pattern;
 @Component
 public class AnswerReferenceParser {
 
-    /** 普通时间引用，支持可选「（画面）」后缀 */
+    /** 普通时间引用，支持可选「（画面）」/「（字幕）」后缀 */
     private static final Pattern TIME_REF = Pattern.compile(
-            "\\[(\\d{1,2}):(\\d{2})(?:-(\\d{1,2}):(\\d{2}))?](（画面）)?");
+            "\\[(\\d{1,2}):(\\d{2})(?:-(\\d{1,2}):(\\d{2}))?](（画面）|（字幕）)?");
     /** 画面时间引用，如「【画面@01:23】」 */
     private static final Pattern FRAME_REF = Pattern.compile(
             "【画面@(\\d{1,2}):(\\d{2})(?:-(\\d{1,2}):(\\d{2}))?】");
+    /** 字幕时间引用，如「【字幕@01:23】」 */
+    private static final Pattern OCR_REF = Pattern.compile(
+            "【字幕@(\\d{1,2}):(\\d{2})(?:-(\\d{1,2}):(\\d{2}))?】");
     private static final int MATCH_TOLERANCE_SEC = 5;
 
     public List<ReferenceDto> parse(String answer, Long videoId, List<VectorRepository.SearchHit> hits) {
@@ -38,8 +41,9 @@ public class AnswerReferenceParser {
         while (timeMatcher.find()) {
             int startSec = toSec(timeMatcher, 1, 2);
             int endSec = timeMatcher.group(4) != null ? Math.max(startSec, toSec(timeMatcher, 3, 4)) : startSec + 10;
-            boolean vision = timeMatcher.group(5) != null;
-            ReferenceDto ref = buildRef(hits, videoId, startSec, endSec, vision);
+            boolean vision = "（画面）".equals(timeMatcher.group(5));
+            boolean ocrText = "（字幕）".equals(timeMatcher.group(5));
+            ReferenceDto ref = buildRef(hits, videoId, startSec, endSec, vision, ocrText);
             dedup.put(ref.startSec() + ":" + ref.type(), ref);
         }
         Matcher frameMatcher = FRAME_REF.matcher(text);
@@ -47,7 +51,15 @@ public class AnswerReferenceParser {
             int startSec = toSec(frameMatcher, 1, 2);
             int endSec = frameMatcher.group(4) != null ? Math.max(startSec, toSec(frameMatcher, 3, 4)) : startSec;
             // 画面标记引用：必然为画面
-            ReferenceDto ref = buildRef(hits, videoId, startSec, endSec, true);
+            ReferenceDto ref = buildRef(hits, videoId, startSec, endSec, true, false);
+            dedup.put(ref.startSec() + ":" + ref.type(), ref);
+        }
+        Matcher ocrMatcher = OCR_REF.matcher(text);
+        while (ocrMatcher.find()) {
+            int startSec = toSec(ocrMatcher, 1, 2);
+            int endSec = ocrMatcher.group(4) != null ? Math.max(startSec, toSec(ocrMatcher, 3, 4)) : startSec;
+            // 字幕标记引用：必然为字幕
+            ReferenceDto ref = buildRef(hits, videoId, startSec, endSec, false, true);
             dedup.put(ref.startSec() + ":" + ref.type(), ref);
         }
 
@@ -65,16 +77,16 @@ public class AnswerReferenceParser {
         return Integer.parseInt(m.group(minG)) * 60 + Integer.parseInt(m.group(secG));
     }
 
-    /** 组装单条引用：画面标记强制标 FRAME（不依赖命中块），否则沿用命中类型，后端类型权威 */
+    /** 组装单条引用：画面标记强制标 FRAME、字幕标记强制标 OCR（不依赖命中块），否则沿用命中类型，后端类型权威 */
     private ReferenceDto buildRef(List<VectorRepository.SearchHit> hits, Long videoId,
-                                  int startSec, int endSec, boolean vision) {
+                                  int startSec, int endSec, boolean vision, boolean ocrText) {
         VectorRepository.SearchHit hit = findClosestHit(hits, startSec);
-        if (vision) {
-            // 显式画面标记：无论是否有命中块，一律按 FRAME 渲染（AGENT 通道 hits 为空时同样生效）
+        if (vision || ocrText) {
+            // 显式画面/字幕标记：无论是否有命中块，一律按标记类型渲染（AGENT 通道 hits 为空时同样生效）
             return new ReferenceDto(hit != null ? hit.videoId() : videoId,
                     hit != null && hit.startSec() != null ? hit.startSec() : startSec,
                     hit != null && hit.endSec() != null ? hit.endSec() : endSec,
-                    "FRAME",
+                    vision ? "FRAME" : "OCR",
                     hit != null ? truncate(hit.content()) : null);
         }
         if (hit != null && "FRAME".equals(hit.type())) {

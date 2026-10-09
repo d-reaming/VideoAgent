@@ -1,17 +1,23 @@
 package com.videoagent.business.video;
 
 import com.videoagent.access.exception.BusinessException;
+import com.videoagent.config.OcrProperties;
 import com.videoagent.config.StorageProperties;
+import com.videoagent.middleware.llm.OcrClient;
 import com.videoagent.middleware.llm.VisionClient;
 import com.videoagent.middleware.util.FfmpegCommandRunner;
 import com.videoagent.storage.entity.FrameRecord;
 import com.videoagent.storage.entity.Video;
+import com.videoagent.storage.entity.VideoOcr;
 import com.videoagent.storage.mapper.FrameRecordMapper;
 import com.videoagent.storage.mapper.VideoMapper;
+import com.videoagent.storage.mapper.VideoOcrMapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -25,8 +31,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 关键帧提取 + 视觉描述：
- * ffmpeg scene 检测抽帧 → 解析帧时间戳 → Qwen-VL 逐帧生成描述 → frame_record 入库。
+ * 关键帧提取 + 视觉描述 + OCR 文字识别（三通道之二/三）：
+ * ffmpeg scene 检测抽帧 → 解析帧时间戳 → Qwen-VL 逐帧描述 + RapidOCR 逐帧文字提取 → 入库。
  */
 @Slf4j
 @Service
@@ -43,8 +49,10 @@ public class FrameExtractService {
     private final StorageProperties storage;
     private final VideoMapper videoMapper;
     private final FrameRecordMapper frameMapper;
+    private final VideoOcrMapper videoOcrMapper;
     private final FfmpegCommandRunner ffmpegRunner;
     private final VisionClient visionClient;
+    private final OcrClient ocrClient;
     private final ExecutorService frameDescribeExecutor;
 
     public void process(Long videoId) {
@@ -52,15 +60,26 @@ public class FrameExtractService {
         if (video == null) {
             throw new BusinessException("视频不存在: " + videoId);
         }
-        // 无视频流（纯音频/仅语音）：跳过分帧与视觉描述，仅保留语音问答
+        // 无视频流（纯音频/仅语音）：跳过分帧与视觉描述/OCR，仅保留语音问答
         if (video.getFilePath() == null || video.getFilePath().isBlank()
                 || !ffmpegRunner.hasVideoStream(Path.of(video.getFilePath()))) {
-            log.info("[frame] videoId={} 无视频流，跳过抽帧/视觉描述", videoId);
+            log.info("[frame] videoId={} 无视频流，跳过抽帧/视觉描述/OCR", videoId);
             return;
         }
         List<Double> frameTimes = extractFrames(video);
         List<FrameRecord> records = saveFrameRecords(videoId, frameTimes);
-        describeFrames(records);
+        runFrameProcessors(records);
+    }
+
+    /** 视觉描述与 OCR 文字提取并行执行（二者互不依赖，共享帧图） */
+    private void runFrameProcessors(List<FrameRecord> records) {
+        if (records.isEmpty()) {
+            return;
+        }
+        CompletableFuture.allOf(
+                CompletableFuture.runAsync(() -> describeFrames(records), frameDescribeExecutor),
+                CompletableFuture.runAsync(() -> ocrFrames(records), frameDescribeExecutor)
+        ).join();
     }
 
     /** ffmpeg scene 检测抽帧，解析 stderr 中的 pts_time 获取帧时间 */
@@ -185,5 +204,57 @@ public class FrameExtractService {
             // 单帧失败不阻断整批（保留空描述，向量化时跳过）
             log.warn("[frame] 描述失败 frameId={} err={}", record.getId(), e.getMessage());
         }
+    }
+
+    /**
+     * OCR 逐帧文字提取（第三信源：字幕/屏显文字）。
+     * 幂等仿 saveFrameRecords：按 frameTime 复用既有 OCR 行，重跑不重复调用 RapidOCR；
+     * OCR 通道未启用或单帧失败仅告警，不阻断流水线。
+     */
+    private void ocrFrames(List<FrameRecord> records) {
+        if (records.isEmpty()) {
+            return;
+        }
+        Long videoId = records.get(0).getVideoId();
+        if (!ocrClient.enabled()) {
+            log.info("[ocr] videoId={} OCR 通道未启用，跳过文字提取", videoId);
+            return;
+        }
+        Map<Integer, List<VideoOcr>> oldByTime = new HashMap<>();
+        for (VideoOcr old : videoOcrMapper.selectList(new LambdaQueryWrapper<VideoOcr>()
+                .eq(VideoOcr::getVideoId, videoId))) {
+            oldByTime.computeIfAbsent(old.getFrameTime(), k -> new ArrayList<>()).add(old);
+        }
+        videoOcrMapper.delete(new LambdaQueryWrapper<VideoOcr>().eq(VideoOcr::getVideoId, videoId));
+
+        int total = 0;
+        for (FrameRecord rec : records) {
+            List<VideoOcr> prev = oldByTime.get(rec.getFrameTime());
+            if (prev != null && !prev.isEmpty()) {
+                // 复用既有 OCR 行，避免重跑时重复调用 OCR
+                for (VideoOcr p : prev) {
+                    p.setId(null);
+                    videoOcrMapper.insert(p);
+                }
+                total += prev.size();
+                continue;
+            }
+            try {
+                List<OcrClient.OcrItem> items = ocrClient.ocr(Paths.get(rec.getImagePath()));
+                for (OcrClient.OcrItem item : items) {
+                    VideoOcr row = new VideoOcr();
+                    row.setVideoId(videoId);
+                    row.setFrameTime(rec.getFrameTime());
+                    row.setText(item.text());
+                    row.setConfidence(BigDecimal.valueOf(item.confidence()));
+                    videoOcrMapper.insert(row);
+                }
+                total += items.size();
+            } catch (Exception e) {
+                // 单帧失败不阻断整批（该帧无 OCR 行，全局上下文/检索时跳过）
+                log.warn("[ocr] 识别失败 frameId={} err={}", rec.getId(), e.getMessage());
+            }
+        }
+        log.info("[ocr] videoId={} ocrItems={}", videoId, total);
     }
 }

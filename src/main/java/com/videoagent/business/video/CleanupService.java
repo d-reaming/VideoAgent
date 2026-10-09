@@ -9,6 +9,7 @@ import com.videoagent.storage.entity.FrameRecord;
 import com.videoagent.storage.entity.TaskRecord;
 import com.videoagent.storage.entity.TranscriptSegment;
 import com.videoagent.storage.entity.Video;
+import com.videoagent.storage.entity.VideoOcr;
 import com.videoagent.storage.entity.enums.CleanupStatus;
 import com.videoagent.storage.mapper.ChatMessageMapper;
 import com.videoagent.storage.mapper.ChatSessionMapper;
@@ -16,6 +17,7 @@ import com.videoagent.storage.mapper.FrameRecordMapper;
 import com.videoagent.storage.mapper.TaskRecordMapper;
 import com.videoagent.storage.mapper.TranscriptSegmentMapper;
 import com.videoagent.storage.mapper.VideoMapper;
+import com.videoagent.storage.mapper.VideoOcrMapper;
 import com.videoagent.storage.repository.KeywordRepository;
 import com.videoagent.storage.repository.VectorRepository;
 import lombok.RequiredArgsConstructor;
@@ -46,6 +48,7 @@ public class CleanupService {
     private final TaskRecordMapper taskRecordMapper;
     private final TranscriptSegmentMapper segmentMapper;
     private final FrameRecordMapper frameMapper;
+    private final VideoOcrMapper videoOcrMapper;
     private final ChatSessionMapper chatSessionMapper;
     private final ChatMessageMapper chatMessageMapper;
     private final VectorRepository vectorRepository;
@@ -116,6 +119,7 @@ public class CleanupService {
             taskRecordMapper.delete(new LambdaQueryWrapper<TaskRecord>().eq(TaskRecord::getVideoId, videoId));
             segmentMapper.delete(new LambdaQueryWrapper<TranscriptSegment>().eq(TranscriptSegment::getVideoId, videoId));
             frameMapper.delete(new LambdaQueryWrapper<FrameRecord>().eq(FrameRecord::getVideoId, videoId));
+            videoOcrMapper.delete(new LambdaQueryWrapper<VideoOcr>().eq(VideoOcr::getVideoId, videoId));
 
             // ③ PG 向量（独立数据源，失败仅记日志，不阻断剩余清理）
             try {

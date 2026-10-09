@@ -1,0 +1,3 @@
+# VideoAgent Python 依赖
+# whisper 相关（faster-whisper 等）此前已手工安装，此处声明 OCR 通道依赖
+rapidocr-onnxruntime

@@ -23,17 +23,18 @@ public class RagSearchTool {
     private final ObjectMapper objectMapper;
 
     /**
-     * 语义检索视频内容（文本+画面）。
+     * 语义检索视频内容（语音文本+画面描述+字幕 OCR）。
      *
      * @param question 检索问题
      * @param videoId  目标视频（null=全局）
      * @param textTopK 文本块数量
      * @param frameTopK 画面块数量
+     * @param ocrTopK 字幕块数量
      */
-    public String ragSearch(String question, Long videoId, int textTopK, int frameTopK) {
+    public String ragSearch(String question, Long videoId, int textTopK, int frameTopK, int ocrTopK) {
         try {
             List<VectorRepository.SearchHit> hits =
-                    vectorSearchService.search(question, videoId, textTopK, frameTopK);
+                    vectorSearchService.search(question, videoId, textTopK, frameTopK, ocrTopK);
             List<Map<String, Object>> list = hits.stream().map(h -> Map.<String, Object>of(
                     "videoId", h.videoId(),
                     "type", h.type(),

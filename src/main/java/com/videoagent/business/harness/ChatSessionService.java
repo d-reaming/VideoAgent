@@ -134,4 +134,33 @@ public class ChatSessionService {
         }
         return sb.toString().strip();
     }
+
+    /**
+     * 上一轮对话（用户问 + 助手答），用于追问/省略主语回指的关联注入。
+     * history() 返回升序，取最近一条 user 及其后的第一条 assistant。
+     */
+    public LastTurn lastTurn(Long sessionId) {
+        List<ChatMessage> history = history(sessionId, 6);
+        ChatMessage lastUser = null;
+        for (ChatMessage m : history) {
+            if ("user".equals(m.getRole())) {
+                lastUser = m;
+            }
+        }
+        if (lastUser == null) {
+            return new LastTurn(null, null);
+        }
+        String answer = null;
+        int idx = history.indexOf(lastUser);
+        for (int i = idx + 1; i < history.size(); i++) {
+            if ("assistant".equals(history.get(i).getRole())) {
+                answer = history.get(i).getContent();
+                break;
+            }
+        }
+        return new LastTurn(lastUser.getContent(), answer);
+    }
+
+    public record LastTurn(String question, String answer) {
+    }
 }

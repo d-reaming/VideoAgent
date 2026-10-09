@@ -34,36 +34,41 @@ public class AgentRuntime {
     private final ToolAgent toolAgent;
     private final ReviewerAgent reviewerAgent;
 
-    public String run(String question, Long videoId, String questionType, String historyText, Plan plan) {
+    public String run(String question, Long videoId, String questionType, String historyText, Plan plan, String followUpHint) {
         String system = """
                 你是视频问答的执行与检索 Agent。流程：
                 1. 分析问题；需要更多信息时调用工具：
-                   - ragSearch(question, videoId, textTopK, frameTopK)：语义检索语音与画面内容，返回 JSON
+                   - ragSearch(question, videoId, textTopK, frameTopK, ocrTopK)：语义检索语音、画面与字幕文字内容，返回 JSON
                    - videoMeta(videoId)：查询视频元数据（标题/时长/分段数）
                    - timeline(videoId, limit)：查看转写时间轴概览
                    - fullText(videoId)：拉取视频全量转写（纯语音，用于时间轴/逐段梳理）
-                   - globalContext(videoId)：拉取视频全量上下文（语音转写+画面描述+元数据，用于总结/大意/全局型问题）
-                2. 依据工具结果组织最终回答（中文），并满足引用要求：
-                   - 引用语音内容标注 [mm:ss]（如 [01:23]）
-                   - 引用画面信息标注 [mm:ss]（画面）
+                   - globalContext(videoId)：拉取视频全量上下文（语音转写+画面描述+字幕文字+元数据，用于总结/大意/全局型问题）
+                2. 依据工具结果组织最终回答（中文，自然、直接、可读），满足引用要求：
+                   - 引用语音内容标注 [mm:ss]（如 [01:23]）；引用画面信息标注 [mm:ss]（画面）；引用画面文字/字幕标注 [mm:ss]（字幕）
                    - 依据工具/预取上下文作答，不要编造
-                   - 全局总结/大意类问题：主动归纳全文，给出真实内容总结，不要反复"我只能确认"式免责。
-                   - 无直接证据但可据已有证据+常识合理推断时，给出该推断并标注"（推断）"；既无直接也无从推断才说"视频未覆盖"。
-                   - 若用户是在追问/要求进一步分析（对话历史里你已对同一视频给出整体总结）：直接基于已有总结展开，不要重复从头归纳。
-                3. 规划要点见下方「检索规划」。
+                   - 全局总结/大意类问题：主动归纳全文，给出真实内容总结。
+                   - 有直接证据就正常断言；无直接证据但可合理推断时，用自然语言给出结论，仅在确实需要边界时轻量标注"（推测）"，
+                     避免通篇"我只能确认/推断/依据未覆盖"式免责。
+                   - 若收到「上一问回指提示」，则本问题省略主语，围绕上一问作答，不要重新概括全片。
+                3. 回答语言：一律使用简体中文；视频中的外语专名（人名/作品名/机构/术语等）翻译为中文，必要时括号附原文
+                   （如 安（アン））；不要原样堆砌片假名/外文术语。
+                4. 规划要点见下方「检索规划」。
                 """;
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(SystemMessage.from(system));
         if (historyText != null && !historyText.isBlank()) {
             messages.add(SystemMessage.from("对话历史：\n" + historyText));
         }
+        if (followUpHint != null && !followUpHint.isBlank()) {
+            messages.add(SystemMessage.from(followUpHint));
+        }
         // 注入检索规划
         messages.add(SystemMessage.from("检索规划：\n" + plan.describe()));
-        // ABSTRACT/全局型问题：预取全量上下文（语音+画面+元数据），保证摘要有完整依据
+        // ABSTRACT/全局型问题：预取全量上下文（语音+画面+字幕+元数据），保证摘要有完整依据
         if (plan.needFullText()) {
             String global = toolAgent.execute("globalContext", "{\"videoId\":" + videoId + "}");
             messages.add(SystemMessage.from(
-                    "已提供视频全量上下文（语音转写+画面描述+元数据，依此作答，无需再检索全局）：\n" + global));
+                    "已提供视频全量上下文（语音转写+画面描述+字幕文字+元数据，依此作答，无需再检索全局）：\n" + global));
         }
         messages.add(UserMessage.from("问题类型：" + questionType + "\n目标视频ID：" + videoId + "\n问题：" + question));
 
@@ -129,12 +134,13 @@ public class AgentRuntime {
         return List.of(
                 ToolSpecification.builder()
                         .name("ragSearch")
-                        .description("语义检索视频内容（语音文本+画面描述），返回命中片段 JSON 列表")
+                        .description("语义检索视频内容（语音文本+画面描述+字幕文字），返回命中片段 JSON 列表")
                         .parameters(JsonObjectSchema.builder()
                                 .addStringProperty("question")
                                 .addStringProperty("videoId")
                                 .addIntegerProperty("textTopK")
                                 .addIntegerProperty("frameTopK")
+                                .addIntegerProperty("ocrTopK")
                                 .required("question")
                                 .build())
                         .build(),
@@ -164,7 +170,7 @@ public class AgentRuntime {
                         .build(),
                 ToolSpecification.builder()
                         .name("globalContext")
-                        .description("查询视频全量上下文（语音转写+画面描述+元数据），用于总结/大意/内容概述等全局型问题")
+                        .description("查询视频全量上下文（语音转写+画面描述+字幕文字+元数据），用于总结/大意/内容概述等全局型问题")
                         .parameters(JsonObjectSchema.builder()
                                 .addStringProperty("videoId")
                                 .required("videoId")

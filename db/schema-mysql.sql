@@ -48,6 +48,16 @@ CREATE TABLE IF NOT EXISTS frame_record (
   INDEX idx_video (video_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS video_ocr (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  video_id BIGINT NOT NULL,
+  frame_time INT NOT NULL,
+  text TEXT NOT NULL,
+  confidence DECIMAL(4,3) DEFAULT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_video (video_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS chat_session (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   video_id BIGINT,

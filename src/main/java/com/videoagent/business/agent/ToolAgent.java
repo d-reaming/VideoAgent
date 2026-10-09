@@ -28,7 +28,8 @@ public class ToolAgent {
                         str(args, "question"),
                         longArg(args, "videoId"),
                         intArg(args, "textTopK", 8),
-                        intArg(args, "frameTopK", 4));
+                        intArg(args, "frameTopK", 4),
+                        intArg(args, "ocrTopK", 4));
                 case "videoMeta" -> videoMetaTool.videoMeta(requiredLong(args, "videoId"));
                 case "timeline" -> videoMetaTool.timeline(
                         requiredLong(args, "videoId"), intArg(args, "limit", 10));

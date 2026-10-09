@@ -158,7 +158,10 @@ async function loadVideo(id) {
         player = videojs('my-video', { controls: true, fluid: true });
     }
     const url = currentVideo.videoUrl;
-    player.src({ src: url, type: 'video/mp4' });
+    // <video> 无法携带 Authorization 头，通过 ?token= 查询参数带上 JWT（拦截器已支持回退读取）
+    const tok = api.getToken();
+    const sep = url.indexOf('?') >= 0 ? '&' : '?';
+    player.src({ src: tok ? url + sep + 'token=' + encodeURIComponent(tok) : url, type: 'video/mp4' });
 
     renderTimeline();
     await initSessions();
@@ -345,7 +348,8 @@ function renderAnswerMsg(el, content, refs) {
         refs.forEach(r => {
             const ref = document.createElement('div');
             ref.className = 'ref';
-            ref.textContent = '⏱ ' + fmtTime(r.startSec) + ' · ' + (r.type === 'FRAME' ? '画面' : '语音')
+            ref.textContent = '⏱ ' + fmtTime(r.startSec) + ' · '
+                + (r.type === 'FRAME' ? '画面' : (r.type === 'OCR' ? '字幕' : '语音'))
                 + (r.quote ? ' · ' + r.quote : '');
             ref.onclick = () => jump(r.startSec);
             refBox.appendChild(ref);

@@ -38,25 +38,28 @@ public class VectorSearchService {
     private final KeyWordTokenizer keyWordTokenizer;
 
     /**
-     * 联合检索。
+     * 联合检索（三通道：语音 TEXT + 画面 FRAME + 字幕 OCR）。
      *
      * @param question    问题
      * @param videoId     目标视频（null=全局）
      * @param textTopK    文本块数量
-     * @param frameTopK   帧块数量
+     * @param frameTopK   画面块数量
+     * @param ocrTopK     字幕块数量
      */
-    public List<VectorRepository.SearchHit> search(String question, Long videoId, int textTopK, int frameTopK) {
+    public List<VectorRepository.SearchHit> search(String question, Long videoId, int textTopK, int frameTopK, int ocrTopK) {
         float[] queryVec = embeddingService.embed(question);
 
         List<VectorRepository.SearchHit> textHits =
                 vectorRepository.search(queryVec, videoId, "TEXT", textTopK);
         List<VectorRepository.SearchHit> frameHits =
                 vectorRepository.search(queryVec, videoId, "FRAME", frameTopK);
+        List<VectorRepository.SearchHit> ocrHits =
+                vectorRepository.search(queryVec, videoId, "OCR", ocrTopK);
 
         // 倒排精确召回：命中块按 (video,type,startSec) 归并 → 给对应向量块加成
         List<String> tokens = new ArrayList<>(keyWordTokenizer.tokenize(question).keySet());
         List<VectorRepository.SearchHit> kwHits =
-                keywordRepository.search(tokens, videoId, textTopK + frameTopK);
+                keywordRepository.search(tokens, videoId, textTopK + frameTopK + ocrTopK);
         Map<String, Double> boost = new HashMap<>();
         Set<String> covered = new HashSet<>();
         for (VectorRepository.SearchHit h : kwHits) {
@@ -72,6 +75,10 @@ public class VectorSearchService {
             covered.add(key(h));
             merged.add(bump(h, boost));
         }
+        for (VectorRepository.SearchHit h : ocrHits) {
+            covered.add(key(h));
+            merged.add(bump(h, boost));
+        }
         // 语义召回不足时的精确兜底：未进入向量 topK 的纯关键词命中
         for (VectorRepository.SearchHit h : kwHits) {
             if (!covered.contains(key(h))) {
@@ -80,7 +87,7 @@ public class VectorSearchService {
                         h.content(), KEYWORD_FLOOR + KEYWORD_BOOST * norm));
             }
         }
-        return clusterAndRerank(merged, textTopK + frameTopK);
+        return clusterAndRerank(merged, textTopK + frameTopK + ocrTopK);
     }
 
     /** 向量分 + 倒排命中加成 */

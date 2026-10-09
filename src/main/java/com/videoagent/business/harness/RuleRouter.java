@@ -31,11 +31,14 @@ public class RuleRouter {
     private static final List<String> VISUAL_WORDS = List.of("画面", "图表", "图 ", "图像", "屏幕", "看到", "显示",
             "按钮", "界面", "截图", "图片", "海报", "文字内容", "表格");
     private static final List<String> COMPLEX_WORDS = List.of("对比", "总结", "分析", "为什么", "如何", "区别",
-            "综述", "评估", "梳理", "归纳", "一共", "所有", "讲了什么", "讲什么", "摘要", "大意", "全文", "概述", "整体", "主要", "内容是什么");
+            "综述", "评估", "梳理", "归纳", "一共", "所有", "讲了什么", "讲什么", "讲了啥", "讲啥", "说的什么", "说了什么",
+            "说了啥", "说啥", "讲的什么", "摘要", "大意", "全文", "概述", "整体", "主要", "内容是什么", "视频内容",
+            "内容概括", "内容大意", "主题", "在讲什么", "在讲啥", "重点", "讲的内容");
     private static final Pattern TIME_PATTERN = Pattern.compile("(第\\s*\\d+\\s*分钟|几(分|秒)钟|多长时间|时间段|"
             + "在.*(?:分钟|秒)|几点)");
 
-    public record RuleResult(String channel, Long videoId, int textTopK, int frameTopK, String questionType) {
+    public record RuleResult(String channel, Long videoId, int textTopK, int frameTopK, int ocrTopK,
+                             String questionType) {
     }
 
     /**
@@ -85,10 +88,12 @@ public class RuleRouter {
         // 规则4：检索参数
         int textTopK = 8;
         int frameTopK = 4;
+        int ocrTopK = 3;
         switch (questionType) {
             case "VISUAL" -> {
                 textTopK = 6;
                 frameTopK = 8;
+                ocrTopK = 6;
             }
             case "TEMPORAL" -> {
                 textTopK = 10;
@@ -97,13 +102,14 @@ public class RuleRouter {
             case "COMPLEX" -> {
                 textTopK = 10;
                 frameTopK = 6;
+                ocrTopK = 4;
             }
             default -> {
             }
         }
 
-        log.info("[rule] channel={} type={} videoId={} textTopK={} frameTopK={}",
-                channel, questionType, videoId, textTopK, frameTopK);
-        return new RuleResult(channel, videoId, textTopK, frameTopK, questionType);
+        log.info("[rule] channel={} type={} videoId={} textTopK={} frameTopK={} ocrTopK={}",
+                channel, questionType, videoId, textTopK, frameTopK, ocrTopK);
+        return new RuleResult(channel, videoId, textTopK, frameTopK, ocrTopK, questionType);
     }
 }

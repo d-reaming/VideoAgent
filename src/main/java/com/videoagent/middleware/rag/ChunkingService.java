@@ -4,8 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.videoagent.storage.entity.FrameRecord;
 import com.videoagent.storage.entity.TranscriptSegment;
+import com.videoagent.storage.entity.VideoOcr;
 import com.videoagent.storage.mapper.FrameRecordMapper;
 import com.videoagent.storage.mapper.TranscriptSegmentMapper;
+import com.videoagent.storage.mapper.VideoOcrMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -19,6 +21,7 @@ import java.util.Map;
  * 切块策略（亮点 B）：
  * - 转写文本按「时间窗 + 语义」合并为块（目标 20~40s / 300 字内）
  * - 帧描述每帧独立成块（帧时间锚点）
+ * - OCR 画面文字连续相同文本合并为块（字幕/屏显文字，type=OCR）
  */
 @Slf4j
 @Service
@@ -30,12 +33,14 @@ public class ChunkingService {
 
     private final TranscriptSegmentMapper segmentMapper;
     private final FrameRecordMapper frameMapper;
+    private final VideoOcrMapper videoOcrMapper;
     private final ObjectMapper objectMapper;
 
     public List<Chunk> buildChunks(Long videoId) {
         List<Chunk> chunks = new ArrayList<>();
         chunks.addAll(textChunks(videoId));
         chunks.addAll(frameChunks(videoId));
+        chunks.addAll(ocrChunks(videoId));
         return chunks;
     }
 
@@ -89,6 +94,30 @@ public class ChunkingService {
             chunks.add(new Chunk(String.valueOf(videoId), "FRAME", seq++,
                     frame.getFrameTime(), frame.getFrameTime() + 1, content,
                     toJson(meta)));
+        }
+        return chunks;
+    }
+
+    /** OCR 画面文字块：连续相同文本合并为一块（字幕/屏显文字），独立 seq */
+    private List<Chunk> ocrChunks(Long videoId) {
+        List<VideoOcr> rows = videoOcrMapper.selectList(
+                new LambdaQueryWrapper<VideoOcr>()
+                        .eq(VideoOcr::getVideoId, videoId)
+                        .orderByAsc(VideoOcr::getFrameTime));
+        List<Chunk> chunks = new ArrayList<>();
+        int seq = 0;
+        for (int i = 0; i < rows.size(); ) {
+            VideoOcr first = rows.get(i);
+            int j = i + 1;
+            while (j < rows.size()
+                    && first.getText().equals(rows.get(j).getText())
+                    && Math.abs(rows.get(j).getFrameTime() - first.getFrameTime()) <= 10) {
+                j++;
+            }
+            String content = "【字幕@" + fmt(first.getFrameTime()) + "】" + first.getText();
+            chunks.add(new Chunk(String.valueOf(videoId), "OCR", seq++,
+                    first.getFrameTime(), rows.get(j - 1).getFrameTime(), content, null));
+            i = j;
         }
         return chunks;
     }

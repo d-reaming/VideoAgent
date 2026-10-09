@@ -33,6 +33,12 @@ public class AuthInterceptor implements HandlerInterceptor {
         String token = null;
         if (auth != null && auth.startsWith("Bearer ")) {
             token = auth.substring(7);
+        } else {
+            // 静态资源（<video>/<img>）无法携带 Authorization 头，回退读取 ?token= 查询参数
+            String q = request.getParameter("token");
+            if (q != null && !q.isBlank()) {
+                token = q;
+            }
         }
         Long userId = token == null ? null : jwtUtil.verifyUserId(token);
         if (userId == null) {

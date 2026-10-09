@@ -9,8 +9,10 @@ import com.videoagent.config.AsrProperties;
 import com.videoagent.config.LlmProperties;
 import com.videoagent.storage.entity.FrameRecord;
 import com.videoagent.storage.entity.TranscriptSegment;
+import com.videoagent.storage.entity.VideoOcr;
 import com.videoagent.storage.mapper.FrameRecordMapper;
 import com.videoagent.storage.mapper.TranscriptSegmentMapper;
+import com.videoagent.storage.mapper.VideoOcrMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,7 +28,7 @@ import java.util.Map;
 
 /**
  * 音视校正（S4，去噪型修正，必做、可用 correct.enabled 开关关闭）：
- * 用画面帧字幕（FrameRecord.description，烧录字幕/屏显文字对专名权威于 ASR）校正同时间戳
+ * 用画面文字权威源（OCR 字幕/屏显文字优先，无 OCR 时回退帧描述）校正同时间戳
  * ASR 乱码专名，产出 "时间 → 画面权威正确文本" 映射。
  * <p>
  * 流水线为 转录→抽帧 顺序，转录时帧尚不存在，故校正为懒计算：由 GlobalContextTool 消费时
@@ -46,15 +48,16 @@ public class CorrectionService {
     private final LlmProperties llm;
     private final TranscriptSegmentMapper segmentMapper;
     private final FrameRecordMapper frameMapper;
+    private final VideoOcrMapper videoOcrMapper;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
 
     private RestClient restClient;
 
-    /** 一条音视校正：ASR 原文本 → 画面字幕权威正确写法 */
+    /** 一条音视校正：ASR 原文本 → 画面文字权威正确写法 */
     public record Correction(int startSec, int endSec, String asr, String corrected, Confidence confidence) {
         public String toAnnotation() {
-            return "语音【" + asr + "】→ 画面字幕权威写法【" + corrected + "】";
+            return "语音【" + asr + "】→ 字幕权威写法【" + corrected + "】";
         }
     }
 
@@ -97,14 +100,17 @@ public class CorrectionService {
         if (segments.isEmpty()) {
             return List.of();
         }
+        // 画面文字权威源：OCR 字幕/屏显文字优先（精确），帧描述回退（描述性）
+        List<VideoOcr> ocrRows = videoOcrMapper.selectList(new LambdaQueryWrapper<VideoOcr>()
+                .eq(VideoOcr::getVideoId, videoId)
+                .orderByAsc(VideoOcr::getFrameTime));
         List<FrameRecord> frames = frameMapper.selectList(new LambdaQueryWrapper<FrameRecord>()
                 .eq(FrameRecord::getVideoId, videoId)
                 .orderByAsc(FrameRecord::getFrameTime));
-        // 取有可见文本的帧（描述非空）
         List<FrameRecord> textFrames = frames.stream()
                 .filter(f -> f.getDescription() != null && !f.getDescription().isBlank())
                 .toList();
-        if (textFrames.isEmpty()) {
+        if (ocrRows.isEmpty() && textFrames.isEmpty()) {
             return List.of();
         }
 
@@ -112,7 +118,9 @@ public class CorrectionService {
         for (int i = 0; i < segments.size(); i++) {
             TranscriptSegment s = segments.get(i);
             int t = s.getStartSec();
-            boolean hit = textFrames.stream()
+            boolean hit = ocrRows.stream()
+                    .anyMatch(o -> Math.abs(o.getFrameTime() - t) <= ALIGN_WINDOW)
+                    || textFrames.stream()
                     .anyMatch(f -> Math.abs(f.getFrameTime() - t) <= ALIGN_WINDOW);
             if (hit) {
                 aligned.add(i);
@@ -121,13 +129,14 @@ public class CorrectionService {
         if (aligned.isEmpty()) {
             return List.of();
         }
-        return llmCorrect(videoId, segments, textFrames, aligned);
+        return llmCorrect(videoId, segments, textFrames, ocrRows, aligned);
     }
 
-    /** 批量 LLM 校正：逐一分段用重叠帧文本作为专名权威参照，输出校正结果 */
+    /** 批量 LLM 校正：逐一分段用同窗口画面文字（OCR 优先）作为专名权威参照，输出校正结果 */
     private List<Correction> llmCorrect(Long videoId, List<TranscriptSegment> segments,
-                                        List<FrameRecord> textFrames, List<Integer> aligned) {
-        // 组装输入：seg + 同窗口画面字幕文本
+                                        List<FrameRecord> textFrames, List<VideoOcr> ocrRows,
+                                        List<Integer> aligned) {
+        // 组装输入：seg + 同窗口画面文字（OCR 优先，无 OCR 回退帧描述）
         StringBuilder input = new StringBuilder("{\"pairs\":[");
         for (int idx = 0; idx < aligned.size(); idx++) {
             int i = aligned.get(idx);
@@ -135,14 +144,21 @@ public class CorrectionService {
             if (idx > 0) {
                 input.append(',');
             }
+            String ocrTexts = ocrRows.stream()
+                    .filter(o -> Math.abs(o.getFrameTime() - s.getStartSec()) <= ALIGN_WINDOW)
+                    .map(VideoOcr::getText)
+                    .reduce((a, b) -> a + "；" + b)
+                    .orElse("");
             String frameTexts = textFrames.stream()
                     .filter(f -> Math.abs(f.getFrameTime() - s.getStartSec()) <= ALIGN_WINDOW)
                     .map(FrameRecord::getDescription)
                     .reduce((a, b) -> a + "；" + b)
                     .orElse("");
+            // OCR 文字权威于 VLM 描述：命中 OCR 时以其为准
+            String authoritative = ocrTexts.isBlank() ? frameTexts : ocrTexts;
             input.append("{\"seq\":").append(idx)
                     .append(",\"asr\":").append(quote(s.getText()))
-                    .append(",\"frame\":").append(quote(frameTexts)).append('}');
+                    .append(",\"frame\":").append(quote(authoritative)).append('}');
         }
         input.append("]}");
 
