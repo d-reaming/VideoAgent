@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>问答 · VideoAgent</title>
+    <link href="https://vjs.zencdn.net/8.10.0/video-js.css" rel="stylesheet">
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>VideoAgent — 时间轴感知问答</h1>
+        <nav>
+            <a href="/index.html">首页</a>
+            <a href="/upload.html">上传</a>
+            <a href="/qa.html">问答</a>
+            <a href="/login.html" onclick="event.preventDefault();api.logout()">退出</a>
+        </nav>
+    </header>
+
+    <div class="card">
+        <div class="row">
+            <select id="videoSelect" style="flex:2" onchange="loadVideo(this.value)"></select>
+            <button class="btn secondary" onclick="refreshList()" title="刷新视频列表与状态">刷新视频</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+            <span class="muted" style="white-space:nowrap">历史会话：</span>
+            <select id="sessionSelect" style="flex:1" onchange="onSessionChange(this.value)"></select>
+            <button class="btn secondary" onclick="newSession()" title="开启一个新会话（旧会话仍可下拉切换回来）">新建会话</button>
+        </div>
+        <div class="muted" id="videoMeta" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card" id="playerCard" style="display:none">
+        <video id="my-video" class="video-js vjs-big-play-centered" controls preload="auto" playsinline>
+        </video>
+        <!-- 时间轴：视频分段色块，回答引用命中高亮 -->
+        <div id="timeline" class="timeline"></div>
+        <div id="timelineHint" class="muted" style="margin-top:6px">时间轴：蓝块=语音分段，紫块=关键帧画面；问答引用命中位置显示为亮条。</div>
+    </div>
+
+    <div class="card" id="qaCard" style="display:none">
+        <h2>对话 <span class="muted" id="sessionIdLabel"></span></h2>
+        <div id="chatBox" class="chat-box"></div>
+        <div class="row" style="margin-top:12px">
+            <input type="text" id="questionInput" placeholder="提问，如：视频在第几分钟讲了什么？画面上有哪些图表？"
+                   onkeydown="if(event.key==='Enter')sendQuestion()">
+            <button class="btn" id="sendBtn" onclick="sendQuestion()">发送</button>
+        </div>
+        <div class="muted" id="channelHint" style="margin-top:8px">回答中的 [mm:ss] 可点击跳转到视频对应位置。</div>
+    </div>
+</div>
+
+<style>
+    .chat-box { max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+    .msg { max-width: 82%; padding: 10px 14px; border-radius: 12px; font-size: 14px; white-space: pre-wrap; }
+    .msg.user { align-self: flex-end; background: var(--primary); color: #fff; }
+    .msg.assistant { align-self: flex-start; background: #f1f3f9; }
+    .msg .ts { color: var(--primary); font-weight: 600; cursor: pointer; text-decoration: none; border-bottom: 1px dashed var(--primary); }
+    .refs { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .ref { font-size: 12px; color: var(--muted); background: #eef2ff; border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+    .ref b { color: var(--primary); }
+    .timeline { position: relative; height: 26px; background: #eef1f8; border-radius: 6px; margin-top: 12px; overflow: hidden; }
+    .tl-seg { position: absolute; top: 3px; bottom: 3px; background: #93b4f7; border-radius: 3px; }
+    .tl-frame { position: absolute; top: 0; bottom: 0; width: 3px; background: var(--frame); }
+    .tl-hit { position: absolute; top: 0; bottom: 0; background: #f59e0b; opacity: .85; box-shadow: 0 0 0 1px #fff; }
+    .chat-box::-webkit-scrollbar { width: 6px; } .chat-box::-webkit-scrollbar-thumb { background: #d5d9e6; border-radius: 3px; }
+</style>
+
+<script src="https://vjs.zencdn.net/8.10.0/video.min.js"></script>
+<script src="/js/api.js"></script>
+<script>
+let player = null;
+let currentVideo = null;
+let sessionId = null;
+
+const params = new URLSearchParams(location.search);
+const preVideoId = params.get('videoId');
+
+if (!api.getToken()) { location.href = '/login.html'; } else { init(); }
+
+async function init() {
+    const videos = await api.listVideos();
+    const sel = document.getElementById('videoSelect');
+    sel.innerHTML = '';
+    let firstReady = null;
+    videos.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v.id;
+        opt.textContent = '#' + v.id + ' ' + v.title + '（' + fmtTime(v.durationSec) + ' · ' + v.status + '）';
+        sel.appendChild(opt);
+        if (v.status === 'READY' && !firstReady) firstReady = v.id;
+    });
+    if (preVideoId) {
+        sel.value = preVideoId;
+        await loadVideo(preVideoId);
+    } else if (firstReady) {
+        // 自动选中第一个已就绪视频并加载，避免默认选中未就绪视频导致对话界面不出现
+        sel.value = firstReady;
+        await loadVideo(firstReady);
+    } else {
+        document.getElementById('videoMeta').textContent = '暂无已就绪的视频，请先到上传页上传并等待处理';
+    }
+}
+
+async function refreshList() {
+    // 手动刷新：重建下拉 + 若新视频转为 READY 则自动加载；保持当前选中的会话不被打断
+    try {
+        const videos = await api.listVideos();
+        const sel = document.getElementById('videoSelect');
+        const currentId = currentVideo ? currentVideo.id : sel.value;
+        sel.innerHTML = '';
+        let firstReady = null;
+        videos.forEach(v => {
+            const opt = document.createElement('option');
+            opt.value = v.id;
+            opt.textContent = '#' + v.id + ' ' + v.title + '（' + fmtTime(v.durationSec) + ' · ' + v.status + '）';
+            sel.appendChild(opt);
+            if (v.status === 'READY' && !firstReady) firstReady = v.id;
+        });
+        const currentExists = videos.some(v => v.id === currentId);
+        const target = currentExists ? currentId : firstReady;
+        if (!target) {
+            document.getElementById('videoMeta').textContent = '暂无已就绪的视频，请先到上传页上传并等待处理';
+            return;
+        }
+        sel.value = target;
+        if (currentVideo && currentExists) {
+            // 仍选中同一视频：仅刷新元信息（状态可能由处理中变为 READY），不重载播放器、不清空会话
+            try {
+                currentVideo = await api.getVideo(target);
+            } catch (e) { /* 视频可能仍未就绪，保留旧信息 */ }
+            document.getElementById('videoMeta').textContent =
+                '时长 ' + fmtTime(currentVideo.durationSec) + ' · 转写分段 ' + (currentVideo.segments || []).length
+                + ' · 关键帧 ' + (currentVideo.frames || []).length + ' · ' + (currentVideo.status || '');
+        } else {
+            await loadVideo(target); // 首次加载或切换到了不同视频
+        }
+    } catch (e) { /* 忽略瞬时网络错误 */ }
+}
+
+async function loadVideo(id) {
+    if (!id) return;
+    try {
+        currentVideo = await api.getVideo(id);
+    } catch (e) {
+        alert('视频尚未就绪：' + e.message);
+        return;
+    }
+    document.getElementById('playerCard').style.display = 'block';
+    document.getElementById('qaCard').style.display = 'block';
+    document.getElementById('videoMeta').textContent =
+        '时长 ' + fmtTime(currentVideo.durationSec) + ' · 转写分段 ' + (currentVideo.segments || []).length
+        + ' · 关键帧 ' + (currentVideo.frames || []).length;
+
+    if (!player) {
+        player = videojs('my-video', { controls: true, fluid: true });
+    }
+    const url = currentVideo.videoUrl;
+    player.src({ src: url, type: 'video/mp4' });
+
+    renderTimeline();
+    await initSessions();
+}
+
+async function initSessions() {
+    // 拉取该视频的历史会话，重建下拉并恢复首选会话
+    const selSess = document.getElementById('sessionSelect');
+    selSess.innerHTML = '';
+    const list = (await api.sessionsList(currentVideo.id)) || [];
+    let blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = '— 新会话 —';
+    selSess.appendChild(blank);
+    list.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = '会话 #' + s.id + '（' + (s.messageCount || 0) + '轮）';
+        selSess.appendChild(opt);
+    });
+    const key = 'vagent:sess:' + currentVideo.id;
+    const saved = localStorage.getItem(key);
+    const hit = list.find(s => Number(saved) === Number(s.id));
+    const preferred = hit ? hit.id : '';
+    document.getElementById('chatBox').innerHTML = '';
+    if (preferred !== '') {
+        sessionId = Number(preferred);
+        selSess.value = preferred;
+        document.getElementById('sessionIdLabel').textContent = '（会话 #' + sessionId + ' · 已恢复）';
+        await loadSessionInto(sessionId);
+    } else {
+        sessionId = null;
+        selSess.value = '';
+        document.getElementById('sessionIdLabel').textContent = '（新会话）';
+    }
+}
+
+function onSessionChange(val) {
+    document.getElementById('chatBox').innerHTML = '';
+    const key = 'vagent:sess:' + currentVideo.id;
+    if (!val) {
+        sessionId = null;
+        localStorage.removeItem(key);
+        document.getElementById('sessionIdLabel').textContent = '（新会话）';
+    } else {
+        sessionId = Number(val);
+        localStorage.setItem(key, sessionId);
+        document.getElementById('sessionIdLabel').textContent = '（会话 #' + sessionId + '）';
+        loadSessionInto(sessionId);
+    }
+}
+
+async function loadSessionInto(id) {
+    const box = document.getElementById('chatBox');
+    const msgs = await api.messages(id);
+    msgs.forEach(m => {
+        if (m.role === 'user') {
+            appendMsg('user', m.content);
+        } else if (m.role === 'assistant') {
+            const div = document.createElement('div');
+            div.className = 'msg assistant';
+            box.appendChild(div);
+            renderAnswerMsg(div, m.content, m.refs || []);
+        }
+    });
+    box.scrollTop = box.scrollHeight;
+}
+
+function renderTimeline() {
+    const tl = document.getElementById('timeline');
+    tl.innerHTML = '';
+    const duration = currentVideo.durationSec || 1;
+    (currentVideo.segments || []).forEach(s => {
+        const el = document.createElement('div');
+        el.className = 'tl-seg';
+        el.style.left = (s.startSec / duration * 100) + '%';
+        el.style.width = Math.max(1, (s.endSec - s.startSec) / duration * 100) + '%';
+        el.title = fmtTime(s.startSec) + '-' + fmtTime(s.endSec) + ' ' + s.text;
+        tl.appendChild(el);
+    });
+    (currentVideo.frames || []).forEach(f => {
+        const el = document.createElement('div');
+        el.className = 'tl-frame';
+        el.style.left = (f.frameTime / duration * 100) + '%';
+        el.title = '画面@' + fmtTime(f.frameTime) + ' ' + (f.description || '');
+        tl.appendChild(el);
+    });
+}
+
+function newSession() {
+    sessionId = null;
+    // 新建会话：仅清空当前对话与本地记忆，历史会话保留在下拉中可切换回来
+    const selSess = document.getElementById('sessionSelect');
+    if (selSess) selSess.value = '';
+    if (currentVideo) localStorage.removeItem('vagent:sess:' + currentVideo.id);
+    document.getElementById('chatBox').innerHTML = '';
+    document.getElementById('sessionIdLabel').textContent = '（新会话）';
+    // 未加载视频时对话区处于隐藏态，点击给了用户可见反馈（否则标题/聊天框的变化都在隐藏区，用户以为"没反应"）
+    if (currentVideo === null) {
+        const qaCard = document.getElementById('qaCard');
+        qaCard.style.display = 'block';
+        document.getElementById('videoMeta').textContent = '请先从下方选择要提问的视频';
+    }
+}
+
+function jump(sec) {
+    if (!player) return;
+    player.currentTime(sec);
+    player.play();
+    highlightHit(sec);
+}
+
+function highlightHit(sec) {
+    const tl = document.getElementById('timeline');
+    tl.querySelectorAll('.tl-hit').forEach(e => e.remove());
+    const duration = currentVideo.durationSec || 1;
+    const hit = document.createElement('div');
+    hit.className = 'tl-hit';
+    hit.style.left = Math.max(0, (sec - 3) / duration * 100) + '%';
+    hit.style.width = Math.max(1, 8 / duration * 100) + '%';
+    tl.appendChild(hit);
+}
+
+async function sendQuestion() {
+    const input = document.getElementById('questionInput');
+    const question = input.value.trim();
+    if (!currentVideo) {
+        alert('请先选择并加载一个已就绪的视频，再提问');
+        return;
+    }
+    if (!question) return;
+    input.value = '';
+    appendMsg('user', question);
+    const btn = document.getElementById('sendBtn');
+    btn.disabled = true;
+    const loading = appendMsg('assistant', '（思考中…）');
+    try {
+        const data = await api.ask(question, currentVideo.id, sessionId);
+        sessionId = data.sessionId;
+        // 持久化会话 id：刷新/退出后仍能恢复当前视频的对话并延续上下文
+        localStorage.setItem('vagent:sess:' + currentVideo.id, sessionId);
+        document.getElementById('sessionIdLabel').textContent = '（会话 #' + sessionId + ' · ' + data.channel + ' 通道）';
+        // 同步更新会话下拉：已存在则选中，否则插入一个新选项并选中
+        const selSess = document.getElementById('sessionSelect');
+        if (selSess) {
+            let found = false;
+            for (let i = 0; i < selSess.options.length; i++) {
+                if (selSess.options[i].value === String(sessionId)) { found = true; break; }
+            }
+            if (found) {
+                selSess.value = sessionId;
+            } else {
+                const opt = document.createElement('option');
+                opt.value = sessionId;
+                opt.textContent = '会话 #' + sessionId + '（新）';
+                selSess.insertBefore(opt, selSess.options[1] || null);
+                selSess.value = sessionId;
+            }
+        }
+        const content = data.answer || '（无回答）';
+        renderAnswerMsg(loading, content, data.references || []);
+    } catch (e) {
+        loading.textContent = '问答失败：' + e.message;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function appendMsg(role, text) {
+    const box = document.getElementById('chatBox');
+    const div = document.createElement('div');
+    div.className = 'msg ' + role;
+    div.textContent = text;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+    return div;
+}
+
+function renderAnswerMsg(el, content, refs) {
+    el.innerHTML = renderTimestamps(content, 'jump');
+    if (refs.length) {
+        const refBox = document.createElement('div');
+        refBox.className = 'refs';
+        refs.forEach(r => {
+            const ref = document.createElement('div');
+            ref.className = 'ref';
+            ref.textContent = '⏱ ' + fmtTime(r.startSec) + ' · ' + (r.type === 'FRAME' ? '画面' : '语音')
+                + (r.quote ? ' · ' + r.quote : '');
+            ref.onclick = () => jump(r.startSec);
+            refBox.appendChild(ref);
+        });
+        el.appendChild(refBox);
+    }
+    const box = document.getElementById('chatBox');
+    box.scrollTop = box.scrollHeight;
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>首页 · VideoAgent</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>VideoAgent — 视频问答工作台</h1>
+        <nav>
+            <a href="/index.html">首页</a>
+            <a href="/upload.html">上传</a>
+            <a href="/qa.html">问答</a>
+            <a href="/login.html" onclick="event.preventDefault();api.logout()">退出</a>
+        </nav>
+    </header>
+
+    <div class="card">
+        <h2>上传新视频/音频</h2>
+        <div class="row">
+            <input type="file" id="uploadFile" style="flex:1">
+            <input type="text" id="uploadTitle" placeholder="标题（可选）" style="flex:1">
+            <button class="btn" id="uploadBtn" onclick="doUpload()">上传</button>
+        </div>
+        <div class="muted" id="uploadTip" style="margin-top:8px">支持 mp4/mov/avi/mkv/webm/mp3/wav 等。上传完成后异步执行：转写 → 抽帧+视觉描述 → 向量化 → 就绪。</div>
+    </div>
+
+    <div class="card">
+        <h2 style="display:flex; align-items:center; justify-content:space-between;">我的视频
+            <button class="btn secondary" onclick="renderList()">刷新</button>
+        </h2>
+        <div class="muted" style="margin-bottom:12px">视频处理完成后（状态为 READY）才可提问，未就绪的视频需等待流水线结束。</div>
+        <div id="videoGrid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px,1fr)); gap:14px;"></div>
+        <div class="muted" id="emptyTip" style="margin-top:8px"></div>
+    </div>
+</div>
+
+<style>
+    .vcard { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border);
+        border-radius: 10px; padding: 14px; background: #fbfbfe; }
+    .vcard .vt { font-weight: 600; font-size: 14px; line-height: 1.4; }
+    .vcard .vb { font-size: 13px; color: var(--muted); }
+    .vcard .err { font-size: 12px; color: var(--err); }
+</style>
+
+<script src="/js/api.js"></script>
+<script>
+const STAGES_SHOW = { TRANSCRIBING: '转写', FRAMING: '抽帧', EMBEDDING: '向量化', READY: '就绪', FAILED: '失败' };
+
+async function init() {
+    if (!api.getToken()) { location.href = '/login.html'; return; }
+    renderList();
+}
+
+async function doUpload() {
+    const file = document.getElementById('uploadFile').files[0];
+    if (!file) { alert('请选择文件'); return; }
+    const btn = document.getElementById('uploadBtn');
+    btn.disabled = true;
+    const tip = document.getElementById('uploadTip');
+    tip.textContent = '上传中…';
+    try {
+        const data = await api.upload(file, document.getElementById('uploadTitle').value);
+        document.getElementById('uploadFile').value = '';
+        document.getElementById('uploadTitle').value = '';
+        tip.textContent = '上传成功，流水线已启动 #' + data.videoId;
+        renderList();
+    } catch (e) {
+        tip.textContent = '上传失败：' + e.message;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function statusTag(status) {
+    const cls = status === 'READY' ? 'ok' : status === 'FAILED' ? 'err'
+        : status === 'DONE' ? 'ok' : 'run';
+    return '<span class="tag ' + cls + '">' + (STAGES_SHOW[status] || status) + '</span>';
+}
+
+async function renderList() {
+    const grid = document.getElementById('videoGrid');
+    const empty = document.getElementById('emptyTip');
+    let videos;
+    try {
+        videos = await api.listVideos();
+    } catch (e) {
+        grid.innerHTML = '<div class="muted">加载视频列表失败：' + e.message + '</div>';
+        return;
+    }
+    if (!videos || videos.length === 0) {
+        grid.innerHTML = '';
+        empty.textContent = '还没有视频，先在上面上传一个';
+        return;
+    }
+    empty.textContent = '';
+    grid.innerHTML = '';
+    for (const v of videos) {
+        grid.appendChild(await buildCard(v));
+    }
+}
+
+async function buildCard(v) {
+    const card = document.createElement('div');
+    card.className = 'vcard';
+
+    const title = document.createElement('div');
+    title.className = 'vt';
+    title.textContent = v.title || '（无标题）';
+    card.appendChild(title);
+
+    const meta = document.createElement('div');
+    meta.className = 'vb';
+    meta.innerHTML = '#' + v.id + ' · ' + fmtTime(v.durationSec || 0) + ' · ' + statusTag(v.status);
+    card.appendChild(meta);
+
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex; gap:8px; margin-top:auto;';
+
+    const renameBtn = document.createElement('button');
+    renameBtn.className = 'btn secondary';
+    renameBtn.textContent = '重命名';
+    renameBtn.style.flex = '1';
+    renameBtn.onclick = async () => {
+        const nt = prompt('新标题：', v.title);
+        if (nt && nt.trim()) {
+            try {
+                await api.renameVideo(v.id, nt.trim());
+                renderList();
+            } catch (e) { alert('重命名失败：' + e.message); }
+        }
+    };
+    actions.appendChild(renameBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn secondary';
+    delBtn.textContent = '删除';
+    delBtn.style.flex = '1';
+    delBtn.onclick = async () => {
+        if (confirm('确定删除视频 #' + v.id + '？将同时删除其转写/关键帧/及答案会话。')) {
+            try {
+                await api.deleteVideo(v.id);
+                renderList();
+            } catch (e) { alert('删除失败：' + e.message); }
+        }
+    };
+    actions.appendChild(delBtn);
+
+    if (v.status === 'READY' || v.status === 'DONE') {
+        const btn = document.createElement('button');
+        btn.className = 'btn';
+        btn.style.flex = '1';
+        btn.textContent = '进入问答 →';
+        btn.onclick = () => { location.href = '/qa.html?videoId=' + v.id; };
+        actions.appendChild(btn);
+    } else if (v.status === 'FAILED') {
+        let task = null;
+        try {
+            task = await api.getTask(v.id);
+        } catch (e) { /* 任务可能未创建 */ }
+        const err = task && task.errorMsg ? task.errorMsg : (v.errorMsg || '');
+        const errEl = document.createElement('div');
+        errEl.className = 'err';
+        errEl.textContent = (err || '处理失败').slice(0, 200);
+        card.appendChild(errEl);
+        const retry = document.createElement('button');
+        retry.className = 'btn secondary';
+        retry.style.flex = '1';
+        retry.textContent = '重试';
+        retry.onclick = async () => {
+            try {
+                await api.retry(v.id);
+                renderList();
+            } catch (e) { alert('重试失败：' + e.message); }
+        };
+        actions.appendChild(retry);
+    } else if (v.status !== 'READY') {
+        // 处理中：展示阶段与各阶段耗时
+        let task = null;
+        try {
+            task = await api.getTask(v.id);
+        } catch (e) { /* 暂时无 task */ }
+        if (task && task.stage) {
+            const stage = document.createElement('div');
+            stage.className = 'vb';
+            stage.textContent = '处理中：' + (STAGES_SHOW[task.stage] || task.stage);
+            card.appendChild(stage);
+            const durs = task.phaseDurations || {};
+            const parts = [];
+            const read = (key) => {
+                if (durs[key] != null) {
+                    return durs[key].tag ? durs[key].tag : ((durs[key] / 1000).toFixed(1) + 's');
+                }
+                return null;
+            };
+            const t = read('transcribe_ms') || read('transcribe');
+            if (t) parts.push('转写 ' + t);
+            const f = read('frame_ms') || read('frame');
+            if (f) parts.push('抽帧 ' + f);
+            const e = read('embed_ms') || read('embed');
+            if (e) parts.push('向量化 ' + e);
+            if (parts.length) {
+                const durEl = document.createElement('div');
+                durEl.className = 'vb';
+                durEl.textContent = parts.join(' · ');
+                card.appendChild(durEl);
+            }
+        }
+        const muted = document.createElement('div');
+        muted.className = 'muted';
+        muted.textContent = '处理完成后可提问';
+        card.appendChild(muted);
+    }
+    card.appendChild(actions);
+    return card;
+}
+
+init();
+</script>
+</body>
+</html>

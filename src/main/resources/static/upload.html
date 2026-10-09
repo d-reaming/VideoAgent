@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>上传 · VideoAgent</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>VideoAgent — 视频上传与处理流水线</h1>
+        <nav>
+            <a href="/index.html">首页</a>
+            <a href="/upload.html">上传</a>
+            <a href="/qa.html">问答</a>
+            <a href="/login.html" onclick="event.preventDefault();api.logout()">退出</a>
+        </nav>
+    </header>
+
+    <div class="card" id="uploadCard">
+        <h2>上传视频/音频（≤2GB，支持 mp4/mov/avi/mkv/webm/mp3/wav 等）</h2>
+        <div class="row">
+            <input type="file" id="file" style="flex:1">
+            <input type="text" id="title" placeholder="标题（可选）" style="flex:1">
+            <button class="btn" id="uploadBtn" onclick="doUpload()">上传</button>
+        </div>
+        <div class="muted" id="uploadTip" style="margin-top:8px">上传完成后将异步执行：转写 → 抽帧+视觉描述 → 向量化，可在此观察流水线。</div>
+    </div>
+
+    <div class="card" id="pipelineCard" style="display:none">
+        <h2>处理流水线 <span class="muted" id="videoTitle"></span></h2>
+
+        <div style="display:flex; gap:10px; margin:16px 0">
+            <div class="stage" id="st-0"><b>① 音频转写</b><br><span class="muted">ffmpeg + whisper</span></div>
+            <div class="stage" id="st-1"><b>② 抽帧 + 视觉描述</b><br><span class="muted">ffmpeg + Qwen-VL</span></div>
+            <div class="stage" id="st-2"><b>③ 向量化入库</b><br><span class="muted">text-embedding + PGVector</span></div>
+            <div class="stage" id="st-3"><b>④ 就绪</b><br><span class="muted">可开始问答</span></div>
+        </div>
+
+        <div class="row" style="flex-wrap:wrap">
+            <span class="tag run" id="taskStatus">…</span>
+            <span class="tag warn" id="degradeTag" style="display:none">ASR 已降级云端</span>
+            <span class="muted" id="phaseDurations"></span>
+        </div>
+        <div class="err-box" id="errorBox" style="display:none">
+            <span id="errorMsg"></span>
+            <button class="btn secondary" onclick="doRetry()">重试</button>
+        </div>
+        <div id="doneBox" style="display:none; margin-top:12px">
+            <button class="btn" onclick="location.href='/qa.html?videoId='+currentVideoId">前往问答 →</button>
+        </div>
+    </div>
+</div>
+
+<style>
+    .stage {
+        flex:1; padding: 14px; border-radius: 10px; background: #f1f3f9;
+        border: 2px solid var(--border); text-align: center; font-size: 13px;
+        transition: all .3s;
+    }
+    .stage.active { border-color: var(--primary); background: #eef2ff; }
+    .stage.done { border-color: var(--ok); background: #f0fdf4; }
+    .stage.failed { border-color: var(--err); background: #fef2f2; }
+    .err-box { margin-top: 12px; padding: 12px; background: #fef2f2; border-radius: 8px;
+        display: flex; gap: 12px; align-items: center; color: #991b1b; font-size: 14px; }
+</style>
+
+<script src="/js/api.js"></script>
+<script>
+if (!api.getToken()) { location.href = '/login.html'; }
+let currentVideoId = null;
+let pollTimer = null;
+
+const STAGES = ['TRANSCRIBING', 'FRAMING', 'EMBEDDING', 'READY'];
+
+async function doUpload() {
+    const file = document.getElementById('file').files[0];
+    if (!file) { alert('请选择文件'); return; }
+    document.getElementById('uploadBtn').disabled = true;
+    document.getElementById('uploadTip').textContent = '上传中…';
+    try {
+        const data = await api.upload(file, document.getElementById('title').value);
+        currentVideoId = data.videoId;
+        document.getElementById('uploadCard').style.display = 'none';
+        document.getElementById('pipelineCard').style.display = 'block';
+        document.getElementById('videoTitle').textContent = '（#' + data.videoId + '）';
+        startPoll();
+    } catch (e) {
+        alert('上传失败: ' + e.message);
+    } finally {
+        document.getElementById('uploadBtn').disabled = false;
+        document.getElementById('uploadTip').textContent = '上传完成后将异步执行：转写 → 抽帧+视觉描述 → 向量化，可在此观察流水线。';
+    }
+}
+
+function startPoll() {
+    stopPoll();
+    pollTimer = setInterval(poll, 3000);
+    poll();
+}
+
+function stopPoll() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+async function poll() {
+    if (!currentVideoId) return;
+    try {
+        const t = await api.getTask(currentVideoId);
+        renderTask(t);
+        if (t.status === 'FAILED' || t.status === 'DONE') stopPoll();
+    } catch (e) { /* 任务可能尚未创建，忽略 */ }
+}
+
+function renderTask(t) {
+    const order = ['TRANSCRIBING', 'FRAMING', 'EMBEDDING'];
+    const idx = order.indexOf(t.stage);
+    for (let i = 0; i < 4; i++) {
+        const el = document.getElementById('st-' + i);
+        el.className = 'stage';
+        if (i < idx) el.classList.add('done');
+        else if (i === idx) el.classList.add('active');
+        if (t.status === 'FAILED' && i === idx) el.classList.add('failed');
+        if (t.status === 'DONE') el.classList.add('done');
+    }
+    const statusEl = document.getElementById('taskStatus');
+    statusEl.className = 'tag ' + (t.status === 'DONE' ? 'ok' : t.status === 'FAILED' ? 'err' : 'run');
+    statusEl.textContent = t.status === 'DONE' ? '全部完成'
+        : t.status === 'FAILED' ? '失败（' + t.stage + '）'
+        : '处理中：' + t.stage;
+
+    const degrade = document.getElementById('degradeTag');
+    degrade.style.display = t.degrade ? '' : 'none';
+    if (t.degrade) degrade.textContent = 'ASR 已降级：' + t.degrade;
+
+    const durations = t.phaseDurations || {};
+    const parts = [];
+    if (durations.transcribe_ms != null) parts.push('转写 ' + (durations.transcribe_ms / 1000).toFixed(1) + 's');
+    if (durations.frame_ms != null) parts.push('抽帧 ' + (durations.frame_ms / 1000).toFixed(1) + 's');
+    if (durations.embed_ms != null) parts.push('向量化 ' + (durations.embed_ms / 1000).toFixed(1) + 's');
+    document.getElementById('phaseDurations').textContent = parts.join(' · ');
+
+    const errBox = document.getElementById('errorBox');
+    if (t.status === 'FAILED') {
+        errBox.style.display = 'flex';
+        document.getElementById('errorMsg').textContent = (t.errorMsg || '').slice(0, 300);
+    } else {
+        errBox.style.display = 'none';
+    }
+    document.getElementById('doneBox').style.display = t.status === 'DONE' ? 'block' : 'none';
+}
+
+async function doRetry() {
+    try {
+        await api.retry(currentVideoId);
+        document.getElementById('errorBox').style.display = 'none';
+        startPoll();
+    } catch (e) { alert('重试失败: ' + e.message); }
+}
+</script>
+</body>
+</html>

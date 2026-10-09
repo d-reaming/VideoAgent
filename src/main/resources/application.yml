@@ -1,0 +1,118 @@
+server:
+  port: 8080
+  tomcat:
+    max-http-form-post-size: 2GB
+    max-swallow-size: 2GB
+
+spring:
+  application:
+    name: video-agent
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          # 静态资源不缓存，避免浏览器缓存旧版 HTML/JS/CSS 导致前端改动不生效
+          # no-store 比 no-cache 更强：完全禁止浏览器/中间层复用旧文件
+          no-store: true
+  servlet:
+    multipart:
+      max-file-size: 2GB
+      max-request-size: 2GB
+  datasource:
+    url: jdbc:mysql://localhost:13306/video_agent?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&characterEncoding=utf8
+    username: root
+    password: root123
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  kafka:
+    bootstrap-servers: localhost:19092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      # 可靠性：等待所有副本确认 + 生产端近无限重试瞬态故障，配合 EventPublisher 有界重试/失败补偿
+      acks: all
+      retries: 2147483647
+      properties:
+        delivery.timeout.ms: 120000
+    consumer:
+      group-id: video-agent-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        # 消费者线程只做「事件派发」，重活已移入独立流水线线程池（pipelineExecutor），不再阻塞 poll，
+        # 因此回调为正常间隔，长任务也不会因失联触发 rebalance 重放。
+        max.poll.interval.ms: 60000
+        spring.json.trusted.packages: com.videoagent.middleware.event
+        spring.json.value.default.type: com.videoagent.middleware.event.VideoEvent
+  data:
+    redis:
+      host: localhost
+      port: 16379
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+video-agent:
+  pipeline:
+    # Qwen-VL 帧描述并发数：加大加速视频处理，但需配合 DashScope 频控；0 表示串行
+    frame-concurrency: ${VIDEO_AGENT_FRAME_CONCURRENCY:5}
+    # 流水线工作线程池：Kafka 消费者只派发，重活在此执行，避免阻塞 poll
+    pool:
+      core-size: ${VIDEO_AGENT_PIPELINE_CORE:4}
+      max-size: ${VIDEO_AGENT_PIPELINE_MAX:8}
+      queue-capacity: ${VIDEO_AGENT_PIPELINE_QUEUE:200}
+  # Redisson 分布式锁
+  lock:
+    wait-ms: ${VIDEO_AGENT_LOCK_WAIT_MS:0}
+  # 登录/用户系统
+  auth:
+    jwt-secret: ${VIDEO_AGENT_JWT_SECRET:}
+    expire-hours: ${VIDEO_AGENT_JWT_EXPIRE_HOURS:72}
+  # 令牌桶限流（令牌/秒）
+  limit:
+    qa-rate: ${VIDEO_AGENT_LIMIT_QA:5}
+    model-rate: ${VIDEO_AGENT_LIMIT_MODEL:8}
+  storage:
+    root: ${VIDEO_AGENT_DATA:./data}
+  ffmpeg:
+    path: ${FFMPEG_PATH:ffmpeg}
+  llm:
+    deepseek:
+      base-url: https://api.deepseek.com
+      api-key: ${DEEPSEEK_API_KEY:}
+      model: deepseek-chat
+      temperature: 0.3
+    dashscope:
+      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api-key: ${DASHSCOPE_API_KEY:}
+      vision-model: qwen-vl-max
+      embedding-model: text-embedding-v3
+      embedding-dim: 1024
+  asr:
+    local:
+      enabled: true
+      python: ${WHISPER_PYTHON:python}
+      worker-script: ./python/whisper_worker.py
+      # 持久化转写 worker：常驻进程加载一次模型，多个视频复用，摊销模型冷加载
+      worker-server-script: ./python/whisper_server.py
+      model-size: small
+      device: auto
+      language: zh
+    cloud:
+      enabled: ${CLOUD_ASR_ENABLED:false}
+  pg:
+    datasource:
+      url: jdbc:postgresql://localhost:5432/video_agent
+      username: postgres
+      password: postgres123
+      driver-class-name: org.postgresql.Driver
+
+logging:
+  level:
+    com.videoagent: info

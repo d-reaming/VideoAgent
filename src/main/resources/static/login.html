@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 · VideoAgent</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>VideoAgent — 登录</h1>
+        <nav><a href="/index.html">首页</a></nav>
+    </header>
+    <div class="card" style="max-width:420px; margin:40px auto;">
+        <h2 id="formTitle">登录</h2>
+        <div style="display:flex; flex-direction:column; gap:12px; margin-top:16px;">
+            <input type="text" id="username" placeholder="用户名">
+            <input type="password" id="password" placeholder="密码" onkeydown="if(event.key==='Enter')submit()">
+            <button class="btn" id="submitBtn" onclick="submit()">登录</button>
+            <div class="muted" id="tip"></div>
+        </div>
+        <div class="muted" style="margin-top:14px">
+            <span onclick="toggleMode()" style="cursor:pointer; color:var(--primary); text-decoration:underline;">没有账号？注册</span>
+        </div>
+    </div>
+</div>
+
+<script src="/js/api.js"></script>
+<script>
+let isRegister = false;
+
+function toggleMode() {
+    isRegister = !isRegister;
+    document.getElementById('formTitle').textContent = isRegister ? '注册' : '登录';
+    document.getElementById('submitBtn').textContent = isRegister ? '注册' : '登录';
+    document.querySelector('span[onclick="toggleMode()"]').textContent =
+        isRegister ? '已有账号？去登录' : '没有账号？注册';
+}
+
+async function submit() {
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+    const tip = document.getElementById('tip');
+    if (!username || !password) { tip.textContent = '请输入用户名和密码'; return; }
+    try {
+        const data = isRegister
+            ? await api.register(username, password)
+            : await api.login(username, password);
+        api.setAuth(data.token, { id: data.userId, name: data.username });
+        location.href = '/index.html';
+    } catch (e) {
+        tip.textContent = (isRegister ? '注册' : '登录') + '失败：' + e.message;
+    }
+}
+</script>
+</body>
+</html>
