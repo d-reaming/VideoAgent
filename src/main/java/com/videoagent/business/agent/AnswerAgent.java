@@ -14,7 +14,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 回答 Agent（快通道单轮生成）：基于检索上下文生成带 [mm:ss] 引用的最终回答。
+ * 回答 Agent（快通道单轮生成，S2 引入分级断言）：
+ * 基于检索上下文生成带 [mm:ss] 引用的最终回答，并按置信分级输出结构化断言。
+ * 分级三态：DIRECT（有直接证据）直接断言 / INFERENCE（无直接证据但可合理推断）标注"（推断）"给出 /
+ * UNSURE（无从判定）明确"视频未覆盖该信息"，不再一刀切拒绝。
  */
 @Slf4j
 @Component
@@ -22,18 +25,24 @@ import java.util.List;
 public class AnswerAgent {
 
     private final ChatModel chatModel;
+    private final GradedAnswerParser parser;
 
-    public String generate(String question, String context, String historyText) {
+    public GradedAnswer generate(String question, String context, String historyText) {
         String system = """
-                你是视频内容问答助手。基于给定的「视频检索上下文」回答用户问题。
-                回答要求：
-                1. 引用语音讲解内容时标注 [mm:ss]（时间来自上下文，如 [01:23]）
-                2. 引用画面信息时标注 [mm:ss]（画面）
-                3. 只依据检索上下文作答；上下文没有的信息，明确说明"视频中未找到相关讲解"
-                4. 保持简洁准确，中文回答
-                检索上下文中每行以 [mm:ss-mm:ss] 开头表示时间范围，格式示例：
-                [00:12-00:35] 语音内容...
-                【画面@01:23】画面描述...
+                你是视频内容问答助手。基于给定的「视频检索上下文」回答用户问题，并输出结构化分级结果。
+                1. 引用语音内容标注 [mm:ss]（如 [01:23]）；引用画面信息标注 [mm:ss]（画面）。
+                2. 区分两类问题：
+                   - 全局总结/大意类：主动归纳上下文，给出真正的内容总结，不要反复声明"我只能确认"。
+                   - 事实点查类：直接回答检索到的内容。
+                3. 按置信分级作答（很重要，不要过度保守）：
+                   - DIRECT：有直接证据（转写原文/画面字幕/元数据），直接断言。
+                   - INFERENCE：无直接证据，但可基于已有证据+常识合理推断，在回答中给出并标注"（推断）"。
+                   - UNSURE：既无直接证据也无法推断时，明确"视频未覆盖该信息"，不要编造。
+                4. 只输出 JSON，格式：
+                {"answer":"给用户的可读中文回答（含引用标注）","assertions":[
+                   {"text":"可独立核验的陈述","confidence":"DIRECT|INFERENCE|UNSURE",
+                    "evidence":[{"type":"AUDIO|VISION|RETRIEVED|META","startSec":20,
+                    "endSec":35,"text":"支撑文本"}]}]}
                 """;
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(SystemMessage.from(system));
@@ -43,7 +52,13 @@ public class AnswerAgent {
         messages.add(UserMessage.from("检索上下文：\n" + context + "\n\n问题：" + question));
         try {
             ChatResponse resp = chatModel.chat(ChatRequest.builder().messages(messages).build());
-            return resp.aiMessage().text();
+            String raw = resp.aiMessage().text();
+            GradedAnswer graded = parser.parse(raw);
+            if (graded != null) {
+                return graded;
+            }
+            // 兜底：模型未走结构化输出，按纯文本返回
+            return GradedAnswer.plain(raw);
         } catch (Exception e) {
             throw new com.videoagent.access.exception.BusinessException("回答生成失败: " + e.getMessage());
         }

@@ -60,10 +60,11 @@ public class QaFacade {
         List<VectorRepository.SearchHit> hits = List.of();
         String answer;
         if (RuleRouter.CHANNEL_FAST.equals(rule.channel())) {
-            // 快通道：确定性检索 + 单轮回答
+            // 快通道：确定性检索 + 单轮分级回答
             hits = vectorSearchService.search(request.question(), rule.videoId(),
                     rule.textTopK(), rule.frameTopK());
-            answer = answerAgent.generate(request.question(), buildContext(hits), history);
+            var graded = answerAgent.generate(request.question(), buildContext(hits), history);
+            answer = graded.answer();
         } else {
             // 语义编排通道：Planner 结构化规划 → Agent Runtime（执行 + Reviewer 回炉）
             Plan plan = plannerAgent.plan(request.question(), rule.questionType(), history);
