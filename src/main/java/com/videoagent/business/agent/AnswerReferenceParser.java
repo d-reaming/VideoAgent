@@ -65,11 +65,19 @@ public class AnswerReferenceParser {
         return Integer.parseInt(m.group(minG)) * 60 + Integer.parseInt(m.group(secG));
     }
 
-    /** 组装单条引用：画面标记或命中画面块统一标 FRAME，否则沿用命中类型，后端类型权威 */
+    /** 组装单条引用：画面标记强制标 FRAME（不依赖命中块），否则沿用命中类型，后端类型权威 */
     private ReferenceDto buildRef(List<VectorRepository.SearchHit> hits, Long videoId,
                                   int startSec, int endSec, boolean vision) {
         VectorRepository.SearchHit hit = findClosestHit(hits, startSec);
-        if (hit != null && (vision || "FRAME".equals(hit.type()))) {
+        if (vision) {
+            // 显式画面标记：无论是否有命中块，一律按 FRAME 渲染（AGENT 通道 hits 为空时同样生效）
+            return new ReferenceDto(hit != null ? hit.videoId() : videoId,
+                    hit != null && hit.startSec() != null ? hit.startSec() : startSec,
+                    hit != null && hit.endSec() != null ? hit.endSec() : endSec,
+                    "FRAME",
+                    hit != null ? truncate(hit.content()) : null);
+        }
+        if (hit != null && "FRAME".equals(hit.type())) {
             return new ReferenceDto(hit.videoId(),
                     hit.startSec() != null ? hit.startSec() : startSec,
                     hit.endSec() != null ? hit.endSec() : endSec,
