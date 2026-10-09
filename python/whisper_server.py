@@ -18,7 +18,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="small", help="模型档位: tiny/base/small/medium/large-v3")
     parser.add_argument("--device", default="cpu", help="auto/cpu/cuda")
-    parser.add_argument("--language", default="zh", help="默认语言代码")
+    parser.add_argument("--language", default=None, help="默认语言代码(缺省 None=自动识别)")
     args = parser.parse_args()
 
     print(f"[whisper-server] loading model={args.model} device={args.device} ...",
@@ -38,7 +38,8 @@ def process(model, line, default_language):
     try:
         req = json.loads(line)
         audio = req["audio"]
-        language = req.get("language") or default_language
+        # 请求内 language 字段优先；缺失才用默认。null/None 表示 AUTO(自动识别/mixed)
+        language = req.get("language", default_language)
         segments, _info = model.transcribe(
             audio,
             language=language,

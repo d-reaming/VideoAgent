@@ -101,11 +101,20 @@ video-agent:
       worker-script: ./python/whisper_worker.py
       # 持久化转写 worker：常驻进程加载一次模型，多个视频复用，摊销模型冷加载
       worker-server-script: ./python/whisper_server.py
-      model-size: small
+      # 精度选择(提升型可选项)：tiny/base/small/medium/large-v3
+      model-size: ${ASR_MODEL_SIZE:small}
       device: auto
-      language: zh
+      # AUTO=自动识别源语言(支持混语言)，FIXED=固定用 language 指定目标语言(如 ja/en)
+      language-mode: ${ASR_LANGUAGE_MODE:AUTO}
+      language: ${ASR_LANGUAGE:zh}
     cloud:
       enabled: ${CLOUD_ASR_ENABLED:false}
+    # 实体归一化(去噪型修正，必做)：ASR 后轻量 LLM 只修正已知实体乱码
+    normalize:
+      enabled: ${ASR_NORMALIZE_ENABLED:true}
+    # 音视校正(去噪型修正，必做)：用帧字幕校正同时间戳 ASR 乱码专名
+    correct:
+      enabled: ${ASR_CORRECT_ENABLED:true}
   pg:
     datasource:
       url: jdbc:postgresql://localhost:5432/video_agent

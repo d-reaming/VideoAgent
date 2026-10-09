@@ -63,7 +63,7 @@ public class CloudAsrProvider implements AsrProvider {
                     请完整转写这段音频，只输出 JSON 数组（不要任何额外说明），格式：
                     [{"start": 0, "end": 3, "text": "..."}, ...]
                     start/end 为秒数。语言：%s。
-                    """.formatted(language);
+                    """.formatted(language == null || language.isBlank() ? "自动识别（可能是混合语言，请按实际语种转写）" : language);
 
             Map<String, Object> body = Map.of(
                     "model", MODEL,

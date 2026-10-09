@@ -2,8 +2,8 @@ package com.videoagent.business.video;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.videoagent.access.exception.BusinessException;
+import com.videoagent.config.AsrProperties;
 import com.videoagent.config.StorageProperties;
-import com.videoagent.middleware.event.EventPublisher;
 import com.videoagent.middleware.llm.AsrProvider;
 import com.videoagent.middleware.util.FfmpegCommandRunner;
 import com.videoagent.storage.entity.TranscriptSegment;
@@ -30,10 +30,12 @@ import java.util.List;
 public class TranscriptionService {
 
     private final StorageProperties storage;
+    private final AsrProperties asr;
     private final VideoMapper videoMapper;
     private final TranscriptSegmentMapper segmentMapper;
     private final FfmpegCommandRunner ffmpegRunner;
     private final List<AsrProvider> asrProviders;
+    private final NormalizationService normalizationService;
     private final StringRedisTemplate redisTemplate;
 
     public void process(Long videoId) {
@@ -43,6 +45,7 @@ public class TranscriptionService {
         }
         Path audio = extractAudio(video);
         List<AsrProvider.Segment> segments = transcribeWithFallback(videoId, audio);
+        segments = normalizationService.normalize(videoId, segments);
         saveSegments(videoId, segments);
     }
 
@@ -67,7 +70,7 @@ public class TranscriptionService {
 
     /** 双通道降级：本地失败 → 云端兜底，降级点写 Redis 供前端展示 */
     private List<AsrProvider.Segment> transcribeWithFallback(Long videoId, Path audio) {
-        String language = "zh";
+        String language = resolveLanguage();
         // 本地通道优先（LocalWhisperAsrProvider），云端兜底
         List<AsrProvider> providers = asrProviders.stream()
                 .sorted(java.util.Comparator.comparing(p -> p.name().startsWith("local") ? 0 : 1))
@@ -87,6 +90,18 @@ public class TranscriptionService {
             }
         }
         throw new BusinessException("所有 ASR 通道均失败");
+    }
+
+    /**
+     * 按语言模式解析目标语言：
+     * AUTO → null（让 ASR 自动识别源语言，支持混语言）；FIXED → 固定目标语言。
+     */
+    private String resolveLanguage() {
+        AsrProperties.Local local = asr.local();
+        if (local.languageMode() != null && "FIXED".equalsIgnoreCase(local.languageMode())) {
+            return local.language();
+        }
+        return null;
     }
 
     private void saveSegments(Long videoId, List<AsrProvider.Segment> segments) {

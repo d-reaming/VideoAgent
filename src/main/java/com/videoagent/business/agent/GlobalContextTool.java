@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.videoagent.business.evidence.Confidence;
 import com.videoagent.business.evidence.Evidence;
 import com.videoagent.business.evidence.EvidenceType;
+import com.videoagent.business.video.CorrectionService;
 import com.videoagent.storage.entity.FrameRecord;
 import com.videoagent.storage.entity.TranscriptSegment;
 import com.videoagent.storage.entity.Video;
@@ -31,6 +32,7 @@ public class GlobalContextTool {
     private final VideoMapper videoMapper;
     private final TranscriptSegmentMapper segmentMapper;
     private final FrameRecordMapper frameMapper;
+    private final CorrectionService correctionService;
 
     /** 全局可读上下文（供 LLM 直接阅读），返回空引用时以文本提示兜底 */
     public String globalContext(Long videoId) {
@@ -74,6 +76,11 @@ public class GlobalContextTool {
                                 f.getFrameTime(), f.getFrameTime(), f.getDescription(), Confidence.DIRECT));
                     }
                 });
+
+        // 音视校正注记：画面字幕对专名权威于 ASR，作为审校提示追加在音/视之后
+        correctionService.corrections(videoId).forEach(c ->
+                list.add(new Evidence(EvidenceType.AUDIO, c.startSec(), c.endSec(),
+                        "【音视校订】" + c.toAnnotation(), c.confidence())));
 
         return list;
     }

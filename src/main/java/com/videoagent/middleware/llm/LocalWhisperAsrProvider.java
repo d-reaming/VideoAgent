@@ -55,7 +55,8 @@ public class LocalWhisperAsrProvider implements AsrProvider {
             Map<String, Object> req = new LinkedHashMap<>();
             req.put("id", requestId);
             req.put("audio", audioPath.toAbsolutePath().toString());
-            req.put("language", language == null ? asr.local().language() : language);
+            // language 为 null 表示 AUTO：让 faster-whisper 自动识别(支持混语言)；非空为 FIXED 目标语言
+            req.put("language", language);
             stdin.write(objectMapper.writeValueAsString(req) + "\n");
             stdin.flush();
 
@@ -88,10 +89,10 @@ public class LocalWhisperAsrProvider implements AsrProvider {
             return;
         }
         AsrProperties.Local local = asr.local();
+        // 语言不在此指定：AUTO/固定语言均由请求内 language 字段逐次决定(null=自动识别)
         List<String> cmd = List.of(local.python(), local.workerServerScript(),
                 "--model", local.modelSize(),
-                "--device", local.device(),
-                "--language", local.language() == null ? "zh" : local.language());
+                "--device", local.device());
         log.info("[asr:local] 持久化 worker 启动: {}", String.join(" ", cmd));
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(false);
