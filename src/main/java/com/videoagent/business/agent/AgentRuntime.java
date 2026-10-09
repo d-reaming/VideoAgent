@@ -74,10 +74,11 @@ public class AgentRuntime {
             answer = "（Agent 未能生成回答）";
         }
 
-        // ② Reviewer：验收，未通过则携带意见回炉
+        // ② Reviewer：保真验收（注入问答事实依据供逐项核验），未通过则携带意见回炉
         if (videoId != null) {
+            String groundTruth = toolAgent.execute("globalContext", "{\"videoId\":" + videoId + "}");
             for (int round = 1; round <= MAX_REVISE_ROUNDS; round++) {
-                ReviewerAgent.ReviewResult review = reviewerAgent.review(question, answer, videoId);
+                ReviewerAgent.ReviewResult review = reviewerAgent.review(question, answer, videoId, groundTruth);
                 if (review.pass()) {
                     break;
                 }
