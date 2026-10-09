@@ -41,7 +41,8 @@ public class AgentRuntime {
                    - ragSearch(question, videoId, textTopK, frameTopK)：语义检索语音与画面内容，返回 JSON
                    - videoMeta(videoId)：查询视频元数据（标题/时长/分段数）
                    - timeline(videoId, limit)：查看转写时间轴概览
-                   - fullText(videoId)：拉取视频全量转写（用于总结/摘要/待全文作答的问题）
+                   - fullText(videoId)：拉取视频全量转写（纯语音，用于时间轴/逐段梳理）
+                   - globalContext(videoId)：拉取视频全量上下文（语音转写+画面描述+元数据，用于总结/大意/全局型问题）
                 2. 依据工具结果组织最终回答（中文），并满足引用要求：
                    - 引用语音内容标注 [mm:ss]（如 [01:23]）
                    - 引用画面信息标注 [mm:ss]（画面）
@@ -55,10 +56,11 @@ public class AgentRuntime {
         }
         // 注入检索规划
         messages.add(SystemMessage.from("检索规划：\n" + plan.describe()));
-        // ABSTRACT/全量转写类问题：预取全量转写，保证摘要有完整依据
+        // ABSTRACT/全局型问题：预取全量上下文（语音+画面+元数据），保证摘要有完整依据
         if (plan.needFullText()) {
-            String fullText = toolAgent.execute("fullText", "{\"videoId\":" + videoId + "}");
-            messages.add(SystemMessage.from("已提供视频全量转写（依此作答，无需再查全量）：\n" + fullText));
+            String global = toolAgent.execute("globalContext", "{\"videoId\":" + videoId + "}");
+            messages.add(SystemMessage.from(
+                    "已提供视频全量上下文（语音转写+画面描述+元数据，依此作答，无需再检索全局）：\n" + global));
         }
         messages.add(UserMessage.from("问题类型：" + questionType + "\n目标视频ID：" + videoId + "\n问题：" + question));
 
@@ -150,7 +152,15 @@ public class AgentRuntime {
                         .build(),
                 ToolSpecification.builder()
                         .name("fullText")
-                        .description("查询视频全量转写文本（含时间戳），用于总结/摘要/全文类问题")
+                        .description("查询视频全量转写文本（含时间戳，仅语音），用于逐段/时间轴类问题")
+                        .parameters(JsonObjectSchema.builder()
+                                .addStringProperty("videoId")
+                                .required("videoId")
+                                .build())
+                        .build(),
+                ToolSpecification.builder()
+                        .name("globalContext")
+                        .description("查询视频全量上下文（语音转写+画面描述+元数据），用于总结/大意/内容概述等全局型问题")
                         .parameters(JsonObjectSchema.builder()
                                 .addStringProperty("videoId")
                                 .required("videoId")

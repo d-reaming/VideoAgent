@@ -16,6 +16,7 @@ public class ToolAgent {
 
     private final RagSearchTool ragSearchTool;
     private final VideoMetaTool videoMetaTool;
+    private final GlobalContextTool globalContextTool;
     private final ObjectMapper objectMapper;
 
     @SuppressWarnings("unchecked")
@@ -32,6 +33,7 @@ public class ToolAgent {
                 case "timeline" -> videoMetaTool.timeline(
                         requiredLong(args, "videoId"), intArg(args, "limit", 10));
                 case "fullText" -> videoMetaTool.fullText(requiredLong(args, "videoId"));
+                case "globalContext" -> globalContextTool.globalContext(requiredLong(args, "videoId"));
                 default -> throw new BusinessException("未知工具: " + toolName);
             };
         } catch (BusinessException e) {
