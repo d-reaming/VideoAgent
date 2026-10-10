@@ -22,4 +22,9 @@ public record StorageProperties(String root) {
     public String framesDir() {
         return root + "/frames";
     }
+
+    /** 分片上传临时目录（WS4）：按 uploadId 存放 .part 分片 */
+    public String chunkDir() {
+        return root + "/chunk-uploads";
+    }
 }

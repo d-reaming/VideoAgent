@@ -3,6 +3,7 @@ package com.videoagent.access.controller;
 import com.videoagent.access.dto.ApiResponse;
 import com.videoagent.access.dto.TaskProgressDto;
 import com.videoagent.business.video.VideoAccessService;
+import com.videoagent.middleware.event.TaskSseRegistry;
 import com.videoagent.middleware.task.TaskService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
  * 任务进度查询与手动重试（可观测性/降级展示）。
@@ -24,6 +26,14 @@ public class TaskController {
 
     private final TaskService taskService;
     private final VideoAccessService accessService;
+    private final TaskSseRegistry sseRegistry;
+
+    @Operation(summary = "查看任务阶段 SSE 推送（text/event-stream），管道阶段变化时实时推送 progress")
+    @GetMapping(value = "/video/{videoId}/sse", produces = "text/event-stream")
+    public SseEmitter subscribe(@PathVariable Long videoId) {
+        accessService.owned(videoId);
+        return sseRegistry.subscribe(videoId);
+    }
 
     @Operation(summary = "查询任务进度（状态/阶段耗时/错误）")
     @GetMapping("/video/{videoId}")

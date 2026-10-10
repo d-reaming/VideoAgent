@@ -8,10 +8,12 @@ import com.videoagent.access.exception.BusinessException;
 import com.videoagent.middleware.event.EventPublisher;
 import com.videoagent.middleware.event.Topics;
 import com.videoagent.middleware.lock.PipelineLockService;
+import com.videoagent.storage.entity.TaskFailure;
 import com.videoagent.storage.entity.TaskRecord;
 import com.videoagent.storage.entity.Video;
 import com.videoagent.storage.entity.enums.TaskStage;
 import com.videoagent.storage.entity.enums.VideoStatus;
+import com.videoagent.storage.mapper.TaskFailureMapper;
 import com.videoagent.storage.mapper.TaskRecordMapper;
 import com.videoagent.storage.mapper.VideoMapper;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -33,6 +36,7 @@ import java.util.concurrent.TimeUnit;
 public class TaskService {
 
     private final TaskRecordMapper taskRecordMapper;
+    private final TaskFailureMapper taskFailureMapper;
     private final VideoMapper videoMapper;
     private final EventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
@@ -43,6 +47,9 @@ public class TaskService {
     private static final String STATE_KEY = "video-agent:pipeline:state:";
     private static final String START_KEY = "video-agent:pipeline:start:";
     private static final Duration CACHE_TTL = Duration.ofHours(1);
+
+    /** 单任务自动重试最大次数：达到后置死信 DEAD，不再自动重试（手动重试仍可对 FAILED 生效） */
+    public static final int AUTO_RETRY_MAX = 3;
 
     /** 新建任务（视频上传后创建） */
     public TaskRecord createTask(Long videoId) {
@@ -93,17 +100,54 @@ public class TaskService {
         return v == null ? null : Long.parseLong(v);
     }
 
-    /** 任务失败：记录错误 + 重试次数 + 视频 FAILED */
+    /** 任务失败：记录错误 + 重试次数 + 视频 FAILED + 失败台账；重试耗尽则置死信 DEAD */
     public void fail(Long videoId, String stage, String errorMsg) {
         TaskRecord task = getByVideoId(videoId);
+        int attempt = (task.getRetryCount() == null ? 0 : task.getRetryCount()) + 1;
         task.setStage(stage);
-        task.setStatus("FAILED");
+        task.setStatus(TaskRecord.STATUS_FAILED);
         task.setErrorMsg(truncate(errorMsg));
-        task.setRetryCount(task.getRetryCount() == null ? 1 : task.getRetryCount() + 1);
+        task.setRetryCount(attempt);
+        // 失败明细落账（每次失败一行），供自动重试退避与死信审计
+        ledger(task.getVideoId(), stage, errorMsg, attempt, null);
+        if (attempt >= AUTO_RETRY_MAX) {
+            // 自动重试耗尽 → 死信终态 + 该失败尝试标记为死信
+            task.setStatus(TaskRecord.STATUS_DEAD);
+            ledger(task.getVideoId(), stage, errorMsg, attempt, LocalDateTime.now());
+            log.error("[task] 重试耗尽置 DEAD(死信) videoId={} stage={} attempts={}", videoId, stage, attempt);
+        }
         taskRecordMapper.updateById(task);
         updateVideoStatus(videoId, VideoStatus.FAILED);
         cacheState(task);
-        log.error("[task] FAILED videoId={} stage={} err={}", videoId, stage, errorMsg);
+        log.error("[task] FAILED{} videoId={} stage={} err={}", attempt >= AUTO_RETRY_MAX ? "/DEAD" : "", videoId, stage, errorMsg);
+    }
+
+    /** 显式将任务置为死信（调度器防御性兜底/后续扩展用）：任务 DEAD + 落账 */
+    public void markDead(Long videoId, String reason) {
+        TaskRecord task = getByVideoId(videoId);
+        task.setStatus(TaskRecord.STATUS_DEAD);
+        task.setErrorMsg(truncate(reason));
+        taskRecordMapper.updateById(task);
+        ledger(videoId, task.getStage() == null ? "UNKNOWN" : task.getStage(), reason,
+                task.getRetryCount() == null ? AUTO_RETRY_MAX : task.getRetryCount() + 1, LocalDateTime.now());
+        cacheState(task);
+        log.error("[task] markDead videoId={} reason={}", videoId, reason);
+    }
+
+    /** 写入一条失败台账记录 */
+    private void ledger(Long videoId, String stage, String errorMsg, int attempt, LocalDateTime deadAt) {
+        try {
+            TaskFailure f = new TaskFailure();
+            f.setVideoId(videoId);
+            f.setStage(stage);
+            f.setErrorMsg(truncate(errorMsg));
+            f.setRetryable(1);
+            f.setAttempt(attempt);
+            f.setDeadAt(deadAt);
+            taskFailureMapper.insert(f);
+        } catch (Exception e) {
+            log.warn("[task] 失败台账落账失败 videoId={} stage={} err={}", videoId, stage, e.getMessage());
+        }
     }
 
     /** 全部完成：任务 DONE + 视频 READY */
@@ -131,31 +175,40 @@ public class TaskService {
             }
             TaskRecord task = getByVideoId(videoId);
             String stage = task.getStage();
-            // 允许重投的次数限制，防止无限重试
-            if (task.getRetryCount() != null && task.getRetryCount() >= 3) {
-                throw new BusinessException("重试次数已达上限(3次)");
+            // 允许重投的次数限制，防止无限重试（FAILED 且未达上限的才能被自动/手动重试）
+            if (task.getRetryCount() != null && task.getRetryCount() >= AUTO_RETRY_MAX) {
+                throw new BusinessException("重试次数已达上限(" + AUTO_RETRY_MAX + "次)");
             }
             // 失败后视频状态被置为 FAILED；重试前把它重置为「本阶段之前」的期望状态，
             // 否则 VideoPipelineService.shouldRun 幂等守卫会因状态≠期望而拦截掉这次重投
-            VideoStatus expectedBefore = switch (stage) {
-                case "TRANSCRIBING" -> VideoStatus.UPLOADED;
-                case "FRAMING" -> VideoStatus.TRANSCRIBING;
-                case "EMBEDDING" -> VideoStatus.FRAMING;
-                default -> throw new BusinessException("未知阶段: " + stage);
-            };
-            updateVideoStatus(videoId, expectedBefore);
-            topic[0] = switch (stage) {
-                case "TRANSCRIBING" -> Topics.VIDEO_UPLOADED;
-                case "FRAMING" -> Topics.VIDEO_TRANSCRIBED;
-                case "EMBEDDING" -> Topics.VIDEO_FRAMED;
-                default -> throw new BusinessException("未知阶段: " + stage);
-            };
+            updateVideoStatus(videoId, stageToExpectedBefore(stage));
+            topic[0] = stageToRepublishTopic(stage);
         });
         if (!locked) {
             throw new BusinessException("系统繁忙，请稍后重试");
         }
         // 锁已释放后才投递，唤醒流水线消费重投事件
         eventPublisher.publish(topic[0], videoId);
+    }
+
+    /** 阶段 → 重投 topic：手动重试(TaskService.retry)与自动重试(TaskRetryScheduler)共用的映射 */
+    static String stageToRepublishTopic(String stage) {
+        return switch (stage) {
+            case "TRANSCRIBING" -> Topics.VIDEO_UPLOADED;
+            case "FRAMING" -> Topics.VIDEO_TRANSCRIBED;
+            case "EMBEDDING" -> Topics.VIDEO_FRAMED;
+            default -> throw new BusinessException("未知阶段: " + stage);
+        };
+    }
+
+    /** 阶段 → 重投前的期望状态：把 FAILED 的视频状态回退到「该阶段之前」，避免幂等守卫拦截重投 */
+    static VideoStatus stageToExpectedBefore(String stage) {
+        return switch (stage) {
+            case "TRANSCRIBING" -> VideoStatus.UPLOADED;
+            case "FRAMING" -> VideoStatus.TRANSCRIBING;
+            case "EMBEDDING" -> VideoStatus.FRAMING;
+            default -> throw new BusinessException("未知阶段: " + stage);
+        };
     }
 
     /** 进度查询：优先读 Redis 状态缓存（高频读，快），未命中回源 task_record */

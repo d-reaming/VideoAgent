@@ -22,7 +22,14 @@ public class TaskRecord {
     /** 当前阶段，见 {@link com.videoagent.storage.entity.enums.TaskStage} */
     private String stage;
 
-    /** RUNNING / DONE / FAILED */
+    /** 任务终态常量：RUNNING/RUNNING→FAILED/DONE/DEAD */
+    public static final String STATUS_RUNNING = "RUNNING";
+    public static final String STATUS_DONE = "DONE";
+    public static final String STATUS_FAILED = "FAILED";
+    /** 死信终态：自动重试耗尽后置此，不再自动重试；视频保持 FAILED */
+    public static final String STATUS_DEAD = "DEAD";
+
+    /** RUNNING / DONE / FAILED / DEAD */
     private String status;
 
     private Integer retryCount;

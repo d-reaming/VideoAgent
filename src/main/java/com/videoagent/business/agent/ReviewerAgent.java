@@ -3,7 +3,6 @@ package com.videoagent.business.agent;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -19,11 +18,13 @@ import java.util.List;
 
 /**
  * 验收 Agent（三角色之 Reviewer，S3 保真监督）：
- * 基于「问答事实依据」对回答逐项核验三项，输出 {pass, reason}，供执行 Agent 修正后重答（最多 MAX_REVISE_ROUNDS 轮）。
- * 三项核验：
- * ① 置信越权：仅由推断得出的结论被当作既定事实（无直接依据却斩钉截铁）→ 要求标注"（推断）"或降级表述；
- * ② 漏答：问题可据常识+已有依据合理推断，却以"未找到/无法确认"拒答 → 要求补上带"（推断）"的推断；
- * ③ 幻觉：回答了事实依据中完全没有的内容（含凭空捏造时间戳）→ 要求删除或改为"依据未覆盖"。
+ * 基于「问答事实依据」逐项核验回答，输出结构化反馈 {pass, missingRequirements[], unsupportedClaims[],
+ * requiredTimestamps[], feedback[]}，供执行 Agent 定向补证而非整篇盲目重写。
+ * 结构化字段语义（对齐 DoVideoAI Critic）：
+ * ① missingRequirements —— 用户要求被遗漏的作答点 → 触发补全；
+ * ② unsupportedClaims —— 无足够证据的结论/伪引用 → 触发定向重新检索后修正或删除；
+ * ③ requiredTimestamps —— 需要直接加载核实的时间片 → 触发定向重检；
+ * ④ feedback —— 已有证据、仅表达/结构问题 → 沿用当前上下文重写。
  */
 @Slf4j
 @Component
@@ -35,7 +36,28 @@ public class ReviewerAgent {
     /** 注入审核的事实依据最大长度，防止超长视频撑爆上下文 */
     private static final int GROUND_TRUTH_CAP = 20000;
 
-    public record ReviewResult(boolean pass, String reason) {
+    /** 结构化验收结果 */
+    public record ReviewResult(boolean pass, List<String> missingRequirements, List<String> unsupportedClaims,
+                               List<String> requiredTimestamps, List<String> feedback) {
+
+        /** 可读摘要（日志用） */
+        public String reason() {
+            if (pass) {
+                return "通过";
+            }
+            StringBuilder sb = new StringBuilder();
+            appendIf(sb, "遗漏", missingRequirements);
+            appendIf(sb, "无证据结论", unsupportedClaims);
+            appendIf(sb, "需核实时间", requiredTimestamps);
+            appendIf(sb, "反馈", feedback);
+            return sb.length() == 0 ? "不通过" : sb.toString();
+        }
+
+        private static void appendIf(StringBuilder sb, String label, List<String> items) {
+            if (items != null && !items.isEmpty()) {
+                sb.append(label).append('=').append(items);
+            }
+        }
     }
 
     public ReviewResult review(String question, String answer, Long videoId, String groundTruth) {
@@ -44,13 +66,14 @@ public class ReviewerAgent {
             return basicCheck(question, answer);
         }
         String system = """
-                你是视频问答的验收兼保真监督 Agent。基于给定的「问答事实依据」逐项核验回答，输出 JSON {"pass": true/false, "reason": "说明"}。
-                三项核验（只要命中其一即判不过）：
-                1. 置信越权：回答把"仅凭推断"得出的结论当成既成事实陈述（依据中没有直接支撑就斩钉截铁）→ reason 说明应标注"（推断）"或降级表述。
-                2. 漏答：问题可依据视频内容+常识做合理推断，但回答以"未找到/无法确认"简单拒绝而没有给出 → reason 说明应补上带"（推断）"的推断。
-                3. 幻觉：回答出现了事实依据中完全没有的内容，或引用了依据中不存在的 [mm:ss] → reason 说明应删除虚构成分或改为"依据未覆盖该信息"。
-                若三项均不命中（含义充分、置信恰当、无虚构）则 pass=true，reason 留空。
-                只输出 JSON，不要输出其他内容。
+                你是视频问答的验收兼保真监督 Agent。基于给定的「问答事实依据」逐项核验回答，输出严格 JSON：
+                {"pass": true/false, "missingRequirements": [], "unsupportedClaims": [], "requiredTimestamps": [], "feedback": []}
+                判定（命中任一即 pass=false）：
+                1. missingRequirements：用户问的要件被遗漏或未覆盖。
+                2. unsupportedClaims：结论在依据中找不到直接支撑，或引用了依据/真实内容里不存在的 [mm:ss]（包含编造时间戳）。
+                3. requiredTimestamps：需要到某时间片（给出 [mm:ss]）核实但当前证据不足。
+                4. feedback：证据尚可，仅需调整表达、补充推断标注时，放入一条普通修改建议。
+                pass=true 时四数组留空。只输出 JSON，不要输出其他内容。
                 """;
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(SystemMessage.from(system));
@@ -62,17 +85,18 @@ public class ReviewerAgent {
             return parse(text);
         } catch (Exception e) {
             log.warn("[reviewer] 校验失败，默认通过: {}", e.getMessage());
-            return new ReviewResult(true, "校验服务异常，按通过处理");
+            return pass();
         }
     }
 
     /** 无视频/无依据时：仅校验是否充分作答、是否说明"未找到"而非编造 */
     private ReviewResult basicCheck(String question, String answer) {
         String system = """
-                你是视频问答的验收 Agent。判断回答是否合格，输出 JSON {"pass": true/false, "reason": "说明"}。
+                你是视频问答的验收 Agent。判断回答是否合格，输出严格 JSON：
+                {"pass": true/false, "missingRequirements": [], "unsupportedClaims": [], "requiredTimestamps": [], "feedback": []}
                 判定标准：
-                1. 是否充分回答用户问题（避免自相矛盾、答非所问、明显信息缺失）。
-                2. 是否明确说明"视频中未找到相关讲解"当检索不到内容时，而非编造。
+                1. 是否充分回答用户问题（避免自相矛盾、答非所问、明显信息缺失）——缺失则填入 missingRequirements。
+                2. 是否编造视频中不存在的内容——编造则填入 unsupportedClaims。
                 只输出 JSON，不要输出其他内容。
                 """;
         List<ChatMessage> messages = new ArrayList<>();
@@ -82,7 +106,7 @@ public class ReviewerAgent {
             ChatResponse resp = chatModel.chat(ChatRequest.builder().messages(messages).build());
             return parse(resp.aiMessage().text());
         } catch (Exception e) {
-            return new ReviewResult(true, "校验服务异常，按通过处理");
+            return pass();
         }
     }
 
@@ -97,19 +121,35 @@ public class ReviewerAgent {
     }
 
     private ReviewResult parse(String text) {
-        // 兜底：未输出 JSON 时按通过处理
         if (text == null || !text.contains("{")) {
-            return new ReviewResult(true, "reviewer 未返回结构化结果，按通过处理");
+            return pass();
         }
         String json = text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1);
         try {
             JsonNode root = new ObjectMapper().readTree(json);
             boolean pass = root.path("pass").asBoolean(true);
-            String reason = root.has("reason") ? root.get("reason").asText() : "";
-            return new ReviewResult(pass, reason);
+            return new ReviewResult(pass,
+                    strList(root, "missingRequirements"),
+                    strList(root, "unsupportedClaims"),
+                    strList(root, "requiredTimestamps"),
+                    strList(root, "feedback"));
         } catch (JsonProcessingException e) {
             log.warn("[reviewer] 结果解析失败: {}", e.getMessage());
-            return new ReviewResult(true, "reviewer JSON 解析失败，按通过处理");
+            return pass();
         }
+    }
+
+    private List<String> strList(JsonNode root, String field) {
+        List<String> out = new ArrayList<>();
+        JsonNode node = root.path(field);
+        if (node.isArray()) {
+            node.forEach(n -> out.add(n.asText()));
+        }
+        return out;
+    }
+
+    /** 默认通过（校验异常/解析失败时的安全降级） */
+    private ReviewResult pass() {
+        return new ReviewResult(true, List.of(), List.of(), List.of(), List.of());
     }
 }

@@ -1,7 +1,10 @@
 package com.videoagent.business.harness;
 
+import com.videoagent.access.auth.UserContext;
 import com.videoagent.access.dto.QaRequest;
 import com.videoagent.access.exception.BusinessException;
+import com.videoagent.business.agent.IntentClassifier;
+import com.videoagent.business.agent.IntentClassifier.IntentResult;
 import com.videoagent.storage.entity.ChatSession;
 import com.videoagent.storage.entity.Video;
 import com.videoagent.storage.entity.enums.VideoStatus;
@@ -10,12 +13,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
-import java.util.Locale;
-import java.util.regex.Pattern;
-
 /**
  * 确定性规则层（亮点 C 第一层）：毫秒级、可解释、先于 Agent 语义编排决策。
+ * 重构核心：从「FAST/AGENT 双通道」改为「问题模式 → 回答策略（含检索方式）」，
+ * 由 {@link QuestionMode} 决定回答策略，由 {@link Backend} 决定执行后端。
+ * 问题模式不再由关键词判型，改由 {@link IntentClassifier}（LLM 意图识别）给出，
+ * 匹配不准的同义改写问题得到解决；意图分类异常/限流时安全回退 GENERAL，不阻断主链路。
  */
 @Slf4j
 @Component
@@ -23,32 +26,25 @@ import java.util.regex.Pattern;
 public class RuleRouter {
 
     private final VideoMapper videoMapper;
+    private final IntentClassifier intentClassifier;
 
-    /** 通道：快通道（直连 RAG） / 语义编排通道（多 Agent） */
+    /** 通道（对外/历史兼容）：快通道（直连 RAG / 全量归纳）/ 语义编排通道（多 Agent） */
     public static final String CHANNEL_FAST = "FAST";
     public static final String CHANNEL_AGENT = "AGENT";
 
-    private static final List<String> VISUAL_WORDS = List.of("画面", "图表", "图 ", "图像", "屏幕", "看到", "显示",
-            "按钮", "界面", "截图", "图片", "海报", "文字内容", "表格");
-    private static final List<String> COMPLEX_WORDS = List.of("对比", "总结", "分析", "为什么", "如何", "区别",
-            "综述", "评估", "梳理", "归纳", "一共", "所有", "讲了什么", "讲什么", "讲了啥", "讲啥", "说的什么", "说了什么",
-            "说了啥", "说啥", "讲的什么", "摘要", "大意", "全文", "概述", "整体", "主要", "内容是什么", "视频内容",
-            "内容概括", "内容大意", "主题", "在讲什么", "在讲啥", "重点", "讲的内容");
-    private static final Pattern TIME_PATTERN = Pattern.compile("(第\\s*\\d+\\s*分钟|几(分|秒)钟|多长时间|时间段|"
-            + "在.*(?:分钟|秒)|几点)");
-
-    public record RuleResult(String channel, Long videoId, int textTopK, int frameTopK, int ocrTopK,
-                             String questionType) {
+    /** 路由结果：问题模式 + 执行后端 + 检索参数 */
+    public record StrategyPlan(QuestionMode mode, Backend backend, Long videoId,
+                               int textTopK, int frameTopK, int ocrTopK) {
     }
 
     /**
      * 规则决策：
      * 规则1 视频范围：请求指定或会话关联 → 单视频；否则全局
-     * 规则2 问题类型：画面类/时间类/综合类
-     * 规则3 通道选择：综合复杂 → AGENT；简单 → FAST
-     * 规则4 检索参数：类型映射 topK 与 TEXT/FRAME 配比
+     * 规则2 问题模式：概述/画面/时间/分析
+     * 规则3 后端选择：ANALYSIS → AGENT；其余 → FAST
+     * 规则4 检索参数：模式映射 topK 与 TEXT/FRAME 配比
      */
-    public RuleResult route(QaRequest request, ChatSession session) {
+    public StrategyPlan route(QaRequest request, ChatSession session) {
         // 规则1：视频范围
         Long videoId = request.videoId() != null ? request.videoId()
                 : (session != null ? session.getVideoId() : null);
@@ -64,42 +60,32 @@ public class RuleRouter {
             }
         }
 
-        // 规则2：问题类型
-        String q = request.question().toLowerCase(Locale.ROOT);
-        String questionType = "GENERAL";
-        if (COMPLEX_WORDS.stream().anyMatch(q::contains)) {
-            questionType = "COMPLEX";
-        } else if (TIME_PATTERN.matcher(q).find()) {
-            questionType = "TEMPORAL";
-        } else if (VISUAL_WORDS.stream().anyMatch(q::contains)) {
-            questionType = "VISUAL";
+        // 规则2：问题模式（LLM 意图识别，异常/限流安全回退 GENERAL）
+        IntentResult intent = intentClassifier.classify(request.question(), UserContext.get());
+        QuestionMode mode = intent.mode();
+        // SUMMARY 要求单视频语境；全局（无 videoId）时回退为 GENERAL（FAST 全局检索/归纳）
+        if (mode == QuestionMode.SUMMARY && videoId == null) {
+            mode = QuestionMode.GENERAL;
         }
 
-        // 规则3：通道选择
-        String channel;
-        if ("COMPLEX".equals(questionType)) {
-            channel = CHANNEL_AGENT;
-        } else if (request.question().length() > 50) {
-            channel = CHANNEL_AGENT;
-        } else {
-            channel = CHANNEL_FAST;
-        }
+        // 规则3：后端选择
+        Backend backend = mode == QuestionMode.ANALYSIS ? Backend.AGENT : Backend.FAST;
 
         // 规则4：检索参数
         int textTopK = 8;
         int frameTopK = 4;
         int ocrTopK = 3;
-        switch (questionType) {
-            case "VISUAL" -> {
+        switch (mode) {
+            case VISUAL -> {
                 textTopK = 6;
                 frameTopK = 8;
                 ocrTopK = 6;
             }
-            case "TEMPORAL" -> {
+            case SPOT -> {
                 textTopK = 10;
                 frameTopK = 4;
             }
-            case "COMPLEX" -> {
+            case ANALYSIS -> {
                 textTopK = 10;
                 frameTopK = 6;
                 ocrTopK = 4;
@@ -108,8 +94,8 @@ public class RuleRouter {
             }
         }
 
-        log.info("[rule] channel={} type={} videoId={} textTopK={} frameTopK={} ocrTopK={}",
-                channel, questionType, videoId, textTopK, frameTopK, ocrTopK);
-        return new RuleResult(channel, videoId, textTopK, frameTopK, ocrTopK, questionType);
+        log.info("[rule] mode={} backend={} videoId={} textTopK={} frameTopK={} ocrTopK={} intentReason={}",
+                mode, backend, videoId, textTopK, frameTopK, ocrTopK, intent.reason());
+        return new StrategyPlan(mode, backend, videoId, textTopK, frameTopK, ocrTopK);
     }
 }

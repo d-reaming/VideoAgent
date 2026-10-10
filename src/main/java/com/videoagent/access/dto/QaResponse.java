@@ -8,6 +8,7 @@ import java.util.List;
 public record QaResponse(Long sessionId, Long videoId, String channel, String answer,
                          List<ReferenceDto> references) {
 
-    public record ReferenceDto(Long videoId, Integer startSec, Integer endSec, String type, String quote) {
+    public record ReferenceDto(Long videoId, Integer startSec, Integer endSec, String type, String quote,
+                               Boolean verified, String verifyNote) {
     }
 }

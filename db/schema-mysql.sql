@@ -74,3 +74,34 @@ CREATE TABLE IF NOT EXISTS chat_message (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_session (session_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 失败/死信台账：每次阶段失败落一行，重试耗尽后置 DEAD 并记录 dead_at（替代仅靠 task_record.status=FAILED 的粗粒度）。
+-- 由 TaskRetryScheduler 扫描重试；达到 AUTO_RETRY_MAX 仍未成功则 task_record 置 DEAD，本表作为失败明细/死信账本。
+CREATE TABLE IF NOT EXISTS task_failure (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  video_id BIGINT NOT NULL,
+  stage VARCHAR(20) NOT NULL,
+  error_msg VARCHAR(1000),
+  retryable TINYINT NOT NULL DEFAULT 1 COMMENT '1=可重试, 0=永久失败',
+  attempt INT NOT NULL DEFAULT 1 COMMENT '第几次失败尝试（1 起）',
+  dead_at DATETIME DEFAULT NULL COMMENT '成为死信(GOING_DEAD)的时刻，NULL=仍可重试',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_video (video_id),
+  INDEX idx_dead (dead_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 目标级问答 Checkpoint（WS3）：按 (video_id, goal_digest) 保存 Plan/草稿/Reviewer 状态/最终结果，
+-- 相同问题的 DONE 结果可幂等复用；中间态为异步续跑留档。
+CREATE TABLE IF NOT EXISTS qa_checkpoint (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  video_id BIGINT NOT NULL,
+  goal_digest VARCHAR(64) NOT NULL COMMENT 'MD5(归一化问题)',
+  stage VARCHAR(40) NOT NULL COMMENT 'PLANNED/EXECUTED/REVIEWED/DONE',
+  plan_json JSON,
+  exec_draft MEDIUMTEXT,
+  reviewer_state JSON,
+  result MEDIUMTEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_video_goal (video_id, goal_digest)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

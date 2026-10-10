@@ -1,6 +1,7 @@
 package com.videoagent.business.video;
 
 import com.videoagent.middleware.event.EventPublisher;
+import com.videoagent.middleware.event.TaskSseRegistry;
 import com.videoagent.middleware.event.Topics;
 import com.videoagent.middleware.event.VideoEvent;
 import com.videoagent.middleware.lock.PipelineLockService;
@@ -45,6 +46,7 @@ public class VideoPipelineService {
     private final VideoMapper videoMapper;
     private final PipelineLockService pipelineLock;
     private final PipelineMetricsService metrics;
+    private final TaskSseRegistry sseRegistry;
     @Qualifier("pipelineExecutor")
     private final ExecutorService pipelineExecutor;
 
@@ -133,6 +135,8 @@ public class VideoPipelineService {
         if (bodyMs[0] > 0) {
             metrics.stageEnd(stage.name(), videoId, bodyMs[0]);
         }
+        // WS5：推送给该视频的 SSE 订阅者当前进度
+        sseRegistry.publish(videoId, taskService.progress(videoId));
         // 锁释放后再投递下一阶段事件；投递失败则标记任务失败，交由手动 retry 补偿
         if (nextTopic[0] != null) {
             try {

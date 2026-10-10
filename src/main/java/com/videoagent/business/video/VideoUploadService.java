@@ -63,32 +63,7 @@ public class VideoUploadService {
             String storedName = UUID.randomUUID() + "." + ext;
             target = dir.resolve(storedName);
             file.transferTo(target);
-
-            int duration = ffmpegRunner.probeDurationSeconds(target);
-            if (duration <= 0) {
-                throw new BusinessException("无法识别媒体流，文件可能已损坏");
-            }
-            if (duration > MAX_DURATION_SEC) {
-                throw new BusinessException("文件时长超过上限(" + (MAX_DURATION_SEC / 3600) + "小时)，请拆分后上传");
-            }
-
-            Video video = new Video();
-            video.setTitle(title == null || title.isBlank() ? original : title);
-            video.setFilename(storedName);
-            video.setFilePath(target.toString());
-            video.setDurationSec(duration);
-            video.setUserId(uid);
-            video.setStatus(VideoStatus.UPLOADED.name());
-            videoMapper.insert(video);
-
-            taskService.createTask(video.getId());
-
-            // 触发离线流水线（异步）
-            eventPublisher.publish(Topics.VIDEO_UPLOADED, video.getId());
-
-            log.info("[upload] videoId={} owner={} title={} duration={}s", video.getId(), uid,
-                    video.getTitle(), duration);
-            return new UploadResponse(video.getId(), video.getId(), VideoStatus.UPLOADED.name());
+            return registerStoredFile(target, original, title, uid);
         } catch (IOException e) {
             deleteQuietly(target);
             throw new BusinessException("文件保存失败: " + e.getMessage());
@@ -100,6 +75,36 @@ public class VideoUploadService {
             deleteQuietly(target);
             throw new BusinessException("上传处理失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 公共登记入口（单文件上传与分片合并后共用）：探时长 → 校验 → 插 Video → 建任务 → 触发流水线。
+     * 分片 complete 合并出完整文件后复用本方法，避免逻辑重复。
+     */
+    public UploadResponse registerStoredFile(Path target, String originalName, String title, Long uid) {
+        int duration = ffmpegRunner.probeDurationSeconds(target);
+        if (duration <= 0) {
+            throw new BusinessException("无法识别媒体流，文件可能已损坏");
+        }
+        if (duration > MAX_DURATION_SEC) {
+            throw new BusinessException("文件时长超过上限(" + (MAX_DURATION_SEC / 3600) + "小时)，请拆分后上传");
+        }
+        String original = originalName == null ? "untitled" : originalName;
+        Video video = new Video();
+        video.setTitle(title == null || title.isBlank() ? original : title);
+        video.setFilename(target.getFileName().toString());
+        video.setFilePath(target.toString());
+        video.setDurationSec(duration);
+        video.setUserId(uid == null ? 0L : uid);
+        video.setStatus(VideoStatus.UPLOADED.name());
+        videoMapper.insert(video);
+
+        taskService.createTask(video.getId());
+        // 触发离线流水线（异步）
+        eventPublisher.publish(Topics.VIDEO_UPLOADED, video.getId());
+
+        log.info("[upload] videoId={} owner={} title={} duration={}s", video.getId(), uid, video.getTitle(), duration);
+        return new UploadResponse(video.getId(), video.getId(), VideoStatus.UPLOADED.name());
     }
 
     private void deleteQuietly(Path p) {

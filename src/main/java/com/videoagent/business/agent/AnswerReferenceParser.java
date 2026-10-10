@@ -68,7 +68,7 @@ public class AnswerReferenceParser {
             // 回答未带时间戳时，兜底带出最高分命中，保证溯源可见
             VectorRepository.SearchHit top = hits.get(0);
             refs.add(new ReferenceDto(top.videoId(), top.startSec(), top.endSec(), top.type(),
-                    truncate(top.content())));
+                    truncate(top.content()), null, null));
         }
         return refs;
     }
@@ -87,20 +87,23 @@ public class AnswerReferenceParser {
                     hit != null && hit.startSec() != null ? hit.startSec() : startSec,
                     hit != null && hit.endSec() != null ? hit.endSec() : endSec,
                     vision ? "FRAME" : "OCR",
-                    hit != null ? truncate(hit.content()) : null);
+                    hit != null ? truncate(hit.content()) : null,
+                    null, null);
         }
         if (hit != null && "FRAME".equals(hit.type())) {
             return new ReferenceDto(hit.videoId(),
                     hit.startSec() != null ? hit.startSec() : startSec,
                     hit.endSec() != null ? hit.endSec() : endSec,
                     "FRAME",
-                    truncate(hit.content()));
+                    truncate(hit.content()),
+                    null, null);
         }
         return new ReferenceDto(hit != null ? hit.videoId() : videoId,
                 hit != null && hit.startSec() != null ? hit.startSec() : startSec,
                 hit != null && hit.endSec() != null ? hit.endSec() : endSec,
                 hit != null ? hit.type() : "TEXT",
-                hit != null ? truncate(hit.content()) : null);
+                hit != null ? truncate(hit.content()) : null,
+                null, null);
     }
 
     private VectorRepository.SearchHit findClosestHit(List<VectorRepository.SearchHit> hits, int sec) {

@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>宣梦浩 - Java 后端简历</title>
+<style>
+  :root {
+    --primary: #1a1a2e;
+    --accent: #2b6cb0;
+    --strong: #1a5276;
+    --gray: #6c757d;
+    --light-gray: #cbd5e0;
+    --bg: #f7fafc;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Microsoft YaHei', 'PingFang SC', 'Segoe UI', sans-serif;
+    background: #e8ecf1;
+    color: #2d3436;
+    display: flex;
+    justify-content: center;
+    padding: 20px 10px;
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  .page {
+    width: 210mm;
+    min-height: 297mm;
+    background: white;
+    padding: 20px 30px 16px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.10);
+  }
+
+  /* ====== 顶部标题 ====== */
+  .resume-title {
+    text-align: center;
+    font-size: 23px;
+    font-weight: 700;
+    color: var(--primary);
+    letter-spacing: 3px;
+    margin-bottom: 5px;
+  }
+
+  /* ====== 个人信息行 ====== */
+  .info-line {
+    text-align: center;
+    font-size: 13px;
+    color: #2d3436;
+    margin-bottom: 7px;
+  }
+  .info-line .sep {
+    color: var(--light-gray);
+    margin: 0 7px;
+    font-weight: 400;
+  }
+
+  /* ====== 教育栏（双横线窄栏）====== */
+  .edu-bar {
+    border-top: 1.5px solid var(--accent);
+    border-bottom: 1.5px solid var(--accent);
+    padding: 3.5px 14px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--primary);
+    margin-bottom: 9px;
+    letter-spacing: 0.5px;
+  }
+
+  /* ====== 小节标题 ====== */
+  .section-title {
+    font-size: 14.5px;
+    font-weight: 700;
+    color: var(--primary);
+    margin-top: 11px;
+    margin-bottom: 5px;
+    padding-bottom: 2.5px;
+    border-bottom: 1.5px solid var(--accent);
+    letter-spacing: 1px;
+  }
+
+  /* ====== 项目 ====== */
+  .project {
+    margin-top: 8px;
+  }
+  .proj-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 2px;
+  }
+  .proj-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--primary);
+  }
+  .github-link {
+    font-size: 11px;
+    color: var(--accent);
+    text-decoration: none;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .github-link:hover {
+    text-decoration: underline;
+  }
+  .github-link svg {
+    flex-shrink: 0;
+  }
+  .proj-meta {
+    font-size: 12px;
+    color: #2d3436;
+    margin-bottom: 1.5px;
+    line-height: 1.45;
+  }
+  .proj-meta .label {
+    font-weight: 700;
+    color: var(--primary);
+  }
+  .proj-points {
+    list-style: none;
+    padding-left: 2px;
+    margin: 3px 0 0;
+  }
+  .proj-points li {
+    position: relative;
+    font-size: 12px;
+    line-height: 1.5;
+    margin-bottom: 2.5px;
+    padding-left: 13px;
+  }
+  .proj-points li::before {
+    content: "\25AA";
+    color: var(--accent);
+    position: absolute;
+    left: 0;
+    top: 0;
+    font-size: 9px;
+  }
+
+  /* ====== 专业技能 ====== */
+  .skill-list {
+    list-style: none;
+    padding-left: 2px;
+    margin-top: 3px;
+  }
+  .skill-list li {
+    position: relative;
+    font-size: 12px;
+    line-height: 1.5;
+    margin-bottom: 2.5px;
+    padding-left: 13px;
+  }
+  .skill-list li::before {
+    content: "\25AA";
+    color: var(--accent);
+    position: absolute;
+    left: 0;
+    top: 0;
+    font-size: 9px;
+  }
+
+  /* ====== 加粗关键词 ====== */
+  strong {
+    color: var(--strong);
+    font-weight: 700;
+  }
+
+  /* ====== 打印 ====== */
+  @media print {
+    body { background: white; padding: 0; font-size: 12px; }
+    .page {
+      box-shadow: none;
+      width: 100%;
+      min-height: auto;
+      padding: 14px 18px 10px;
+    }
+    .github-link { color: #2b6cb0; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ====== 顶部标题 ====== -->
+  <h1 class="resume-title">Java/Agent 后端简历</h1>
+
+  <!-- ====== 个人信息行 ====== -->
+  <div class="info-line">
+    宣梦浩<span class="sep">|</span>男<span class="sep">|</span>19岁<span class="sep">|</span>手机号码：17811707808<span class="sep">|</span>邮箱：1342248741@qq.com
+  </div>
+
+  <!-- ====== 教育栏（双横线窄栏）====== -->
+  <div class="edu-bar">
+    华南理工大学&nbsp;&nbsp;985&nbsp;&nbsp;211&nbsp;&nbsp;软件工程&nbsp;&nbsp;本科&nbsp;&nbsp;2024.9-至今
+  </div>
+
+  <!-- ====== 项目经历 ====== -->
+  <div class="section-title">项目经历</div>
+
+  <!-- ---- 项目一 ---- -->
+  <div class="project">
+    <div class="proj-header">
+      <span class="proj-title">巷味生活 AlleyLife —— 本地生活服务平台</span>
+      <a href="https://github.com/d-reaming/AlleyLife" class="github-link" target="_blank">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        github.com/d-reaming/AlleyLife
+      </a>
+    </div>
+    <div class="proj-meta"><span class="label">技术栈:</span> Spring Boot 3 &middot; MySQL 8 &middot; Redis &middot; Lua &middot; Kafka &middot; ShardingSphere &middot; MyBatis-Plus &middot; Redisson</div>
+    <div class="proj-meta"><span class="label">项目简介:</span> 一个本地生活与商户运营平台，提供商户信息查询、优惠券秒杀、达人探店、好友关注与签到等功能。针对秒杀场景下的性能瓶颈与热点数据查询压力，基于 Redis 缓存架构、Kafka 消息队列与 ShardingSphere 分库分表进行了深度优化，并补齐缓存、消息、数据库全链路故障补偿闭环，显著提升高并发场景下的系统稳定性与数据一致性。</div>
+    <ul class="proj-points">
+      <li>针对秒杀流量洪峰与库存并发竞争的痛点，以<strong>令牌桶限流</strong>入口拦截，<strong>Redis + Lua 脚本原子扣减库存</strong>并校验一人一单，数据库层<strong>条件更新（乐观锁思想）</strong>兜底，保障高并发下不超卖、不重复抢购。</li>
+      <li>针对同步下单响应慢、消息易丢失重复的痛点，引入 <strong>Kafka</strong> 将下单链路<strong>异步解耦削峰</strong>，通过<strong>发布确认与死信队列</strong>保障消息不丢失，消费端 <strong>uuid 幂等 + 业务查重</strong>保障不重复。</li>
+      <li>针对热点查询频繁打库与缓存失效冲击的痛点，采用<strong>布隆过滤器</strong>、<strong>空值缓存</strong>与 <strong>Redis 互斥锁双重检测</strong>组合方案，显著提升热点查询吞吐与稳定性。</li>
+      <li>针对缓存重建与关键段的并发竞争，基于 <strong>Redisson 可重入/读写分布式锁</strong>保护关键段，显式<strong>锁超时兜底</strong>防止宕机死锁，避免重复查询与重复操作。</li>
+      <li>针对异步链路 Redis 扣减与订单落库不一致、超时积压的痛点，通过<strong>消费超时校验</strong>与<strong>定时对账双向修正</strong>，回滚失败落日志并告警，形成<strong>最终一致性</strong>闭环。</li>
+      <li>针对数据增长下单库单表的存储与性能瓶颈，基于 <strong>ShardingSphere 分库分表</strong>（<strong>分片键路由</strong> + <strong>广播表冗余</strong>），<strong>雪花全局 ID</strong> 配合订单路由表支持按订单号反查，数据规模平滑增长。</li>
+    </ul>
+  </div>
+
+  <!-- ---- 项目二 ---- -->
+  <div class="project">
+    <div class="proj-header">
+      <span class="proj-title">VideoAgent —— 视频多模态 RAG + 多 Agent 问答系统</span>
+    </div>
+    <div class="proj-meta"><span class="label">技术栈:</span> Java &middot; Spring Boot &middot; LangChain4j &middot; Kafka &middot; Redis &middot; Redisson &middot; MySQL &middot; PostgreSQL(pgvector) &middot; Qwen-VL &middot; Whisper/ASR</div>
+    <div class="proj-meta"><span class="label">项目简介:</span> 面向长视频/视频课程的多模态检索增强（RAG）与多 Agent 问答后端：上传后经 Kafka 事件驱动完成 ASR 转写、画面语义抽取、OCR 字幕三通道解析并统一写入"向量+关键词"双路索引；问答侧以 LLM 意图分类路由，经 RAG 检索与多 Agent 协作生成带引用答案，并对所有时间戳引用做确定性校验以防模型编造。</div>
+    <ul class="proj-points">
+      <li><strong>分片上传 + 幂等去重 + 并发控制</strong> — 5MB 分片断点续传、Redis 记进度，合并前查缺校验；<strong>Redisson 分布式锁</strong>保证 complete/<strong>消费幂等</strong>，并发下不重复入库、不重复建任务。</li>
+      <li><strong>多路解析与证据管理</strong> — Whisper ASR + 关键帧 <strong>Qwen-VL</strong> + <strong>OCR 字幕</strong>并行解析，统一为 <strong>Evidence 多模态协议</strong>并对齐时间戳；OCR 字幕作画面文字权威源校正 ASR 专名。</li>
+      <li><strong>问答模式路由与双路检索</strong> — <strong>DeepSeek LLM 意图分类</strong>路由概述/定点/画面/分析/通用五模式；<strong>pgvector 向量 + 关键词倒排</strong>正交混合召回，概述走 map-reduce 全片归纳。</li>
+      <li><strong>意图-执行-监督三角色 Agent 协作 + Function Calling 封装</strong> — <strong>意图识别者</strong>以 LLM 分类与 Planner 拆解目标，<strong>执行者</strong>以 <strong>Function Calling</strong> 调检索工具生成回答，<strong>监督者</strong>结构化验收、针对证据缺口与失实引用定向补证回炉；<strong>Agent 预算</strong>与轮次上限防失控。</li>
+      <li><strong>数据一致性与可靠性</strong> — <strong>MySQL 为源真相 + Redis</strong> 缓存的读写一致，跨库最终一致靠定时对账；失败<strong>自动重试</strong>、上限转 <strong>DEAD 死信台账</strong>兜底，防重复/不一致。</li>
+      <li><strong>崩溃恢复与优雅降级</strong> — 管道崩溃自动续跑，向量索引按 <strong>indexed_seq 断点续传</strong>不重做已入库批次；ASR/Embedding/检索不可用逐级降级，不阻断主链路。</li>
+    </ul>
+  </div>
+
+  <!-- ====== 专业技能 ====== -->
+  <div class="section-title">专业技能</div>
+  <ul class="skill-list">
+    <li>熟练掌握 JavaSE 核心知识，理解常用<strong>集合</strong>及<strong>数据结构</strong>、<strong>面向对象</strong>、<strong>异常</strong>、<strong>反射</strong>、<strong>泛型</strong>等；</li>
+    <li>熟悉 MySQL，理解<strong>事务</strong>、<strong>隔离级别</strong>、<strong>索引</strong>、<strong>MVCC</strong>、<strong>三大日志</strong>、<strong>锁机制</strong>、<strong>慢 SQL 优化</strong>，了解 ShardingSphere <strong>分库分表</strong>与<strong>雪花全局 ID</strong> 设计；</li>
+    <li>熟悉 Redis，理解<strong>核心数据结构</strong>、<strong>持久化策略</strong>、<strong>分布式锁</strong>（<strong>Redisson</strong>）、<strong>缓存穿透/击穿/雪崩</strong>及解决方案、<strong>缓存一致性</strong>，熟悉 <strong>Lua 脚本</strong>与<strong>令牌桶限流</strong>算法；</li>
+    <li>熟悉 Kafka 消息中间件，理解<strong>可靠传输</strong>、<strong>幂等去重</strong>、<strong>顺序消费</strong>、<strong>消息堆积</strong>、<strong>死信队列</strong>及<strong>发布确认</strong>等方案；</li>
+    <li>熟悉 JUC 并发编程，了解<strong>线程池</strong>、<strong>ThreadLocal</strong>、<strong>Synchronized</strong>、<strong>CAS</strong>、<strong>JMM</strong> 等；</li>
+    <li>熟悉 JVM <strong>内存结构</strong>，了解<strong>垃圾回收</strong>机制、<strong>双亲委派</strong>机制、<strong>类生命周期</strong>、常见问题定位与分析等；</li>
+    <li>熟悉 Spring Boot、MyBatis-Plus 等常用框架，了解 <strong>IOC</strong>、<strong>AOP</strong>、<strong>Spring 事务</strong>等核心机制；</li>
+    <li>熟悉大模型应用开发（<strong>Java + LangChain4j</strong>）：掌握 <strong>Function Calling</strong> 工具调用、<strong>RAG 混合检索</strong>（<strong>pgvector</strong> 向量 + 关键词倒排）、<strong>多 Agent 编排</strong>（<strong>LLM 意图分类路由</strong>、执行-监督回炉）、<strong>Agent 预算控制</strong>与独立限流。</li>
+  </ul>
+
+</div>
+</body>
+</html>

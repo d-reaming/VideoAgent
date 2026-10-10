@@ -78,6 +78,20 @@ video-agent:
   limit:
     qa-rate: ${VIDEO_AGENT_LIMIT_QA:5}
     model-rate: ${VIDEO_AGENT_LIMIT_MODEL:8}
+  # 管道自动重试/死信
+  task:
+    retry:
+      # 自动重试调度周期（ms）
+      interval-ms: ${VIDEO_AGENT_TASK_RETRY_INTERVAL_MS:30000}
+  # Agent 预算硬上限（轮次/累计token/墙钟超时），防止工具循环/回炉失控
+  agent:
+    budget:
+      # 单次问答 LLM 调用上限（Planner/执行工具循环/Reviewer 回炉合计）
+      max-llm-calls: ${VIDEO_AGENT_BUDGET_LLM_CALLS:12}
+      # 累计 token（input+output）上限
+      max-tokens: ${VIDEO_AGENT_BUDGET_TOKENS:20000}
+      # 墙钟超时（ms）
+      deadline-ms: ${VIDEO_AGENT_BUDGET_DEADLINE_MS:120000}
   storage:
     root: ${VIDEO_AGENT_DATA:./data}
   ffmpeg:
